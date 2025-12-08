@@ -528,7 +528,7 @@ static bool dominatesSolution(Solution *a, Solution *b) {
 }
 
 // =======================================================
-//  局所探索本体：スケジューリング目的ビットをランダムに反転
+//  局所探索本体：スケジューリング目的をランダムに反転
 // =======================================================
 void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nJobs = numberOfJobs_;
@@ -554,8 +554,9 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
         // 評価
         this->evaluate(neighbor);
 
-        // パレート優越したら採用
+
         if (dominatesSolution(neighbor, solution)) {
+            //cout << " dominated " << endl;
             Variable **varsS = solution->getDecisionVariables();
             for (int k = 0; k < nVars; ++k) {
                 varsS[k]->setValue(varsN[k]->getValue());

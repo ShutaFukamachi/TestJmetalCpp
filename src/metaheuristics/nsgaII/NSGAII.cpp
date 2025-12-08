@@ -16,7 +16,7 @@ NSGAII::NSGAII(Problem *problem)
       populationSize(0) {}
 
 NSGAII::~NSGAII() {
-    // ここでは population 等は delete しない（jMetal 本家実装に合わせる）
+
 }
 
 SolutionSet *NSGAII::execute() {
@@ -92,10 +92,10 @@ SolutionSet *NSGAII::execute() {
             problem_->evaluate(c1);
             problem_->evaluate(c2);
 
-            // ★ ここで RCPSP 用の局所探索を追加
+            //  ここで RCPSP 用の局所探索を追加
             if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-                rcpsp->localSearchOnSchedObj(c1, 5);  // 5回くらいはお好みで
-                rcpsp->localSearchOnSchedObj(c2, 5);
+                rcpsp->localSearchOnSchedObj(c1, 30);
+                rcpsp->localSearchOnSchedObj(c2, 30);
             }
 
             offspringPopulation->add(c1);
