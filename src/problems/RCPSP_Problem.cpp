@@ -510,9 +510,9 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     solution->setObjective(1, totalCost);
 }
 
-// =======================================================
+
 //  パレート優越チェック関数
-// =======================================================
+
 static bool dominatesSolution(Solution *a, Solution *b) {
     int nObj = a->getNumberOfObjectives();
     bool betterInAtLeastOne = false;
