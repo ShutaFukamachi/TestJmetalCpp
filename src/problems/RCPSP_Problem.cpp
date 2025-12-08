@@ -512,7 +512,10 @@ void RCPSP_Problem::evaluate(Solution *solution) {
 
 
 //  パレート優越チェック関数
+static bool dominatesSolution(Solution *a, Solution *b) {
+    int nObj = a->getNumberOfObjectives();
 
+}
 
 
 //  局所探索本体：スケジューリング目的ビットをランダムに反転
