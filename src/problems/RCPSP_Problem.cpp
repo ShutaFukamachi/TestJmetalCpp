@@ -550,7 +550,7 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     while (true) {
         bool improvedInThisSweep = false;
 
-        // ョブ集合を毎回シャッフルしてから全探索
+        // ジョブ集合を毎回シャッフルしてから全探索
         std::shuffle(jobs.begin(), jobs.end(), rng);
 
         for (int idx = 0; idx < (int)jobs.size(); ++idx) {
