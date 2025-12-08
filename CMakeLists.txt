@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # MSVC の文字コード警告対策
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /execution-charset:SHIFT_JIS /source-charset:UTF-8")
 
-# --- ライブラリ化 ---
+#ライブラリ化
 add_library(jmetalcpp STATIC)
 
 file(GLOB_RECURSE ALL_CPP CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")

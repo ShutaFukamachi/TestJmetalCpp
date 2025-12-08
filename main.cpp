@@ -22,9 +22,9 @@
 
 using namespace std;
 
-// =========================================================
+
 // AUGMECON の .sol から startTimes を読む関数
-// =========================================================
+
 bool loadStartTimesFromSol(const std::string &filename,
                            std::vector<int> &startTimes,
                            int expectedJobs) {
@@ -43,7 +43,7 @@ bool loadStartTimesFromSol(const std::string &filename,
     if (expectedJobs > 0 && N != expectedJobs) {
         cerr << "[main] WARNING: N in " << filename
              << " (" << N << ") != expectedJobs (" << expectedJobs << ")\n";
-        // ここでは警告だけにして続行
+
     }
 
     // capacity を読み飛ばす
@@ -58,7 +58,7 @@ bool loadStartTimesFromSol(const std::string &filename,
             cerr << "[main] Failed to read job line " << i << " from " << filename << endl;
             return false;
         }
-        // demand は読み飛ばし
+
         for (int k = 0; k < R; ++k) {
             int tmp;
             fin >> tmp;
@@ -74,9 +74,9 @@ bool loadStartTimesFromSol(const std::string &filename,
     return true;
 }
 
-// =========================================================
+
 // startTimes から NSGA-II 用 Solution を組み立て
-// =========================================================
+
 Solution *buildSolutionFromStartTimes(Problem *problem,
                                       const std::vector<int> &startTimes) {
     int nJobs = (int)startTimes.size();
@@ -112,9 +112,9 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
     return sol;
 }
 
-// =========================================================
+
 // main
-// =========================================================
+
 int main(int argc, char **argv) {
 
     string instanceFile = "j3033_1.sm";
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
     Algorithm *algorithm = new NSGAII(problem);
 
     int populationSize = 100;
-    int maxEvaluations = 2000;
+    int maxEvaluations = 20000;
 
     // RCPSP_Problem 固有の maxEvaluations セッタはこれまで通り
     dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    // NSGAII 側が initialPopulation を見るようにしてある前提
+
     algorithm->setInputParameter("initialPopulation", seedPopulation);
 
     cout << "       populationSize : " << populationSize << endl;

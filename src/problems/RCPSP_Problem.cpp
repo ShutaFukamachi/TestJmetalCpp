@@ -510,26 +510,13 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     solution->setObjective(1, totalCost);
 }
 
-// =======================================================
+
 //  パレート優越チェック関数
-// =======================================================
-static bool dominatesSolution(Solution *a, Solution *b) {
-    int nObj = a->getNumberOfObjectives();
-    bool betterInAtLeastOne = false;
 
-    for (int i = 0; i < nObj; ++i) {
-        double va = a->getObjective(i);
-        double vb = b->getObjective(i);
 
-        if (va > vb) return false;   // a が劣っている
-        if (va < vb) betterInAtLeastOne = true;
-    }
-    return betterInAtLeastOne;
-}
 
-// =======================================================
 //  局所探索本体：スケジューリング目的ビットをランダムに反転
-// =======================================================
+
 void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nJobs = numberOfJobs_;
     int nVars = solution->getNumberOfVariables();
