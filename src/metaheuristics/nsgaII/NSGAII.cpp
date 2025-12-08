@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-
+// ★ RCPSP_Problem を使うため追加
 #include "problems/RCPSP_Problem.h"
 
 NSGAII::NSGAII(Problem *problem)
@@ -16,7 +16,7 @@ NSGAII::NSGAII(Problem *problem)
       populationSize(0) {}
 
 NSGAII::~NSGAII() {
-   // population とかは delete しない
+
 }
 
 SolutionSet *NSGAII::execute() {
@@ -36,7 +36,9 @@ SolutionSet *NSGAII::execute() {
         }
     }
 
+    // -------------------------
     // 初期個体生成
+    // -------------------------
     population = new SolutionSet(populationSize);
     int filled = 0;
 
@@ -44,7 +46,7 @@ SolutionSet *NSGAII::execute() {
         int seedSize = seedPopulation->size();
         for (int i = 0; i < seedSize && filled < populationSize; ++i) {
             Solution *orig = seedPopulation->get(i);
-            Solution *copy = new Solution(orig);
+            Solution *copy = new Solution(orig); // コピーコンストラクタ
             problem_->evaluate(copy);
             population->add(copy);
             ++filled;
@@ -61,8 +63,9 @@ SolutionSet *NSGAII::execute() {
 
     evaluations = population->size();
 
-
+    // -------------------------
     // メインループ
+    // -------------------------
     while (evaluations < maxEvaluations) {
         std::cout << "evaluations = " << evaluations << std::endl;
 
@@ -89,9 +92,10 @@ SolutionSet *NSGAII::execute() {
             problem_->evaluate(c1);
             problem_->evaluate(c2);
 
-            // ここで RCPSP 用の局所探索を追加
+            //  ここで RCPSP 用の局所探索を追加
             if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-
+                rcpsp->localSearchOnSchedObj(c1, 30);
+                rcpsp->localSearchOnSchedObj(c2, 30);
             }
 
             offspringPopulation->add(c1);
@@ -135,7 +139,7 @@ SolutionSet *NSGAII::execute() {
         }
 
         population = nextGen;
-
+        // offspringPopulation / unionPopulation のポインタは上書きしているだけ
     }
 
     setOutputParameter("evaluations", &evaluations);
