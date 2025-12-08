@@ -22,9 +22,9 @@
 
 using namespace std;
 
-// =========================================================
+
 // AUGMECON の .sol から startTimes を読む関数
-// =========================================================
+
 bool loadStartTimesFromSol(const std::string &filename,
                            std::vector<int> &startTimes,
                            int expectedJobs) {
