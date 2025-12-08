@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
     Algorithm *algorithm = new NSGAII(problem);
 
     int populationSize = 100;
-    int maxEvaluations = 20000;
+    int maxEvaluations = 2000;
 
     // RCPSP_Problem 固有の maxEvaluations セッタはこれまで通り
     dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);

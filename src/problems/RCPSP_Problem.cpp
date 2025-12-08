@@ -537,38 +537,70 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     if (nVars < 2 * nJobs) return;
     if (nJobs <= 2) return; // 0 と nJobs-1 が固定なので意味がない
 
-    std::uniform_int_distribution<int> pickJob(1, nJobs - 2); // 0, nJobs-1 は固定
+    // 候補ジョブのリスト（0 と nJobs-1 は除外）
+    std::vector<int> jobs;
+    for (int j = 1; j <= nJobs - 2; ++j) {
+        jobs.push_back(j);
+    }
+    if (jobs.empty()) return;
 
-    for (int iter = 0; iter < maxLSMoves; ++iter) {
-        int j = pickJob(rng);
+    int acceptedMoves = 0;
 
-        // 近傍解を複製
-        Solution *neighbor = new Solution(solution);
+    // 改善が見つからなくなるまで繰り返す
+    while (true) {
+        bool improvedInThisSweep = false;
 
-        Variable **varsN = neighbor->getDecisionVariables();
-        int schedIndex = nJobs + j;  // 後半が schedObj
+        // ョブ集合を毎回シャッフルしてから全探索
+        std::shuffle(jobs.begin(), jobs.end(), rng);
 
-        int old = (int)varsN[schedIndex]->getValue();
-        varsN[schedIndex]->setValue(1 - old);  // 0↔1 反転
+        for (int idx = 0; idx < (int)jobs.size(); ++idx) {
+            int j = jobs[idx];
 
-        // 評価
-        this->evaluate(neighbor);
+            // 近傍解を複製
+            Solution *neighbor = new Solution(solution);
+
+            Variable **varsN = neighbor->getDecisionVariables();
+            int schedIndex = nJobs + j;  // 後半が schedObj
+
+            int old = (int)varsN[schedIndex]->getValue();
+            varsN[schedIndex]->setValue(1 - old);  // 0 <-> 1 反転
+
+            // 評価
+            this->evaluate(neighbor);
+
+            // 近傍が現在の解をパレート優越するなら、その場で受け入れ
+            if (dominatesSolution(neighbor, solution)) {
+                Variable **varsS = solution->getDecisionVariables();
+                for (int k = 0; k < nVars; ++k) {
+                    varsS[k]->setValue(varsN[k]->getValue());
+                }
+                for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
+                    solution->setObjective(o, neighbor->getObjective(o));
+                }
+
+                improvedInThisSweep = true;
+                ++acceptedMoves;
+                delete neighbor;
 
 
-        if (dominatesSolution(neighbor, solution)) {
-            //cout << " dominated " << endl;
-            Variable **varsS = solution->getDecisionVariables();
-            for (int k = 0; k < nVars; ++k) {
-                varsS[k]->setValue(varsN[k]->getValue());
+                break;
             }
-            for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
-                solution->setObjective(o, neighbor->getObjective(o));
-            }
+
+            delete neighbor;
         }
 
-        delete neighbor;
+        // このスイープで一度も改善が見つからなければ終了
+        if (!improvedInThisSweep) {
+            break;
+        }
+
+        // 安全のため、改善回数での打ち切りも入れておく（maxLSMoves <= 0 なら無制限）
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
     }
 }
+
 
 
 

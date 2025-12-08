@@ -94,9 +94,11 @@ SolutionSet *NSGAII::execute() {
 
             //  ここで RCPSP 用の局所探索を追加
             if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-                rcpsp->localSearchOnSchedObj(c1, 30);
-                rcpsp->localSearchOnSchedObj(c2, 30);
+                // -1 or 0 なら「改善できなくなるまで」
+                rcpsp->localSearchOnSchedObj(c1, -1);
+                rcpsp->localSearchOnSchedObj(c2, -1);
             }
+
 
             offspringPopulation->add(c1);
             if (offspringPopulation->size() < populationSize)
