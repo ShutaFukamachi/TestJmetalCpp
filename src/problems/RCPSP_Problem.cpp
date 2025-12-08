@@ -527,9 +527,9 @@ static bool dominatesSolution(Solution *a, Solution *b) {
     return betterInAtLeastOne;
 }
 
-// =======================================================
+
 //  局所探索本体：スケジューリング目的をランダムに反転
-// =======================================================
+
 void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nJobs = numberOfJobs_;
     int nVars = solution->getNumberOfVariables();
