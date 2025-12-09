@@ -16,7 +16,9 @@ public:
     // ランダム・トポロジカル順の Solution
     Solution* createRandomTopoSolution();
 
-    void localSearchOnSchedObj(Solution *solution, int maxLSMoves = 10);
+    void localSearchOnSchedObj(Solution *solution, int maxLSMoves);
+
+    void localSearchOnActivityOrder(Solution *solution, int maxLSMoves);
 
     explicit RCPSP_Problem(const std::string &filename, int strategy = 1);
     ~RCPSP_Problem() override = default;

@@ -100,11 +100,14 @@ SolutionSet *NSGAII::execute() {
             problem_->evaluate(c2);
 
             // ここで RCPSP 用の局所探索を追加
-            // if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-            //     // -1 or 0 なら「改善できなくなるまで」
-            //     rcpsp->localSearchOnSchedObj(c1, -1);
-            //     rcpsp->localSearchOnSchedObj(c2, -1);
-            // }
+            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+                // -1 or 0 なら「改善できなくなるまで」
+                rcpsp->localSearchOnActivityOrder(c1, -1);
+                rcpsp->localSearchOnActivityOrder(c2, -1);
+
+                rcpsp->localSearchOnSchedObj(c1, -1);
+                rcpsp->localSearchOnSchedObj(c2, -1);
+            }
 
 
 

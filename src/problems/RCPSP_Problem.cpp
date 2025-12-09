@@ -259,9 +259,11 @@ static void buildMaxShiftVector(
 
 // ==== コンストラクタ ====
 RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy)
-        : Problem(), strategy_(strategy), instance(readPSPLIB_SM(filename)) {
+        : Problem(), strategy_(strategy),instance(readPSPLIB_SM(filename)){
 
     std::cout << "[RCPSP_Problem] Loading instance from " << filename << std::endl;
+
+
 
     numberOfJobs_ = instance.nJobs;
 
@@ -594,7 +596,150 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
             break;
         }
 
-        // 安全のため、改善回数での打ち切りも入れておく（maxLSMoves <= 0 なら無制限）
+
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
+    }
+}
+
+void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMoves) {
+    int nJobs = numberOfJobs_;
+    int nVars = solution->getNumberOfVariables();
+    if (nJobs <= 2) return;
+    if (nVars < 2 * nJobs) return;
+
+    Variable **vars = solution->getDecisionVariables();
+
+
+    std::vector<int> seq(nJobs);
+    for (int i = 0; i < nJobs; ++i) {
+        seq[i] = (int)vars[i]->getValue();
+    }
+    //トポロジカルでないなら何もしない
+    if (!checkTopological(seq)) {
+        return;
+    }
+
+
+    std::vector<std::vector<int>> preds(nJobs);
+    for (int j = 0; j < nJobs; ++j) {
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                preds[succ].push_back(j);
+            }
+        }
+    }
+
+    int acceptedMoves = 0;
+
+    // 改善が出なくなるまで繰り返す
+    while (true) {
+        bool improvedInThisSweep = false;
+
+        // 位置 i<j の全ペアを作る
+        std::vector<std::pair<int,int>> candPairs;
+        for (int i = 0; i < nJobs - 1; ++i) {
+            for (int j = i + 1; j < nJobs; ++j) {
+
+                if (seq[i] == 0 || seq[i] == nJobs-1) continue;
+                if (seq[j] == 0 || seq[j] == nJobs-1) continue;
+                candPairs.emplace_back(i, j);
+            }
+        }
+        if (candPairs.empty()) break;
+
+
+        std::shuffle(candPairs.begin(), candPairs.end(), rng);
+
+
+        std::vector<int> pos(nJobs);
+        for (int p = 0; p < nJobs; ++p) {
+            pos[seq[p]] = p;
+        }
+
+        for (auto &pr : candPairs) {
+            int i = pr.first;
+            int j = pr.second;
+            if (i >= j) continue;
+
+            int a = seq[i];   // i にいる job
+            int b = seq[j];   // j にいる job
+
+            // precedence を壊さないかチェック
+
+
+            bool bad = false;
+            for (int s : instance.successors[a]) {
+                if (s == b) { bad = true; break; }
+            }
+            if (!bad) {
+                for (int s : instance.successors[b]) {
+                    if (s == a) { bad = true; break; }
+                }
+            }
+            if (bad) continue;
+
+            // i〜j の間に「a の後続」がいないか
+            for (int s : instance.successors[a]) {
+                int ps = pos[s];
+                if (i < ps && ps < j) {
+                    bad = true;
+                    break;
+                }
+            }
+            if (bad) continue;
+
+            // i〜j の間に「b の先行」がいないか
+            for (int pPred : preds[b]) {
+                int pp = pos[pPred];
+                if (i < pp && pp < j) {
+                    bad = true;
+                    break;
+                }
+            }
+            if (bad) continue;
+
+            //swap した近傍解を評価
+            Solution *neighbor = new Solution(solution);
+            Variable **varsN = neighbor->getDecisionVariables();
+
+            // 順序部分だけ swap
+            double vi = varsN[i]->getValue();
+            double vj = varsN[j]->getValue();
+            varsN[i]->setValue(vj);
+            varsN[j]->setValue(vi);
+
+            // 評価
+            this->evaluate(neighbor);
+
+            if (dominatesSolution(neighbor, solution)) {
+                // 改善なら採用
+                Variable **varsS = solution->getDecisionVariables();
+                for (int k = 0; k < nVars; ++k) {
+                    varsS[k]->setValue(varsN[k]->getValue());
+                }
+                for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
+                    solution->setObjective(o, neighbor->getObjective(o));
+                }
+
+
+                std::swap(seq[i], seq[j]);
+
+                improvedInThisSweep = true;
+                ++acceptedMoves;
+                delete neighbor;
+                break;
+            }
+
+            delete neighbor;
+        }
+
+        if (!improvedInThisSweep) {
+            // 改善がなければ局所最適
+            break;
+        }
+
         if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
             break;
         }
