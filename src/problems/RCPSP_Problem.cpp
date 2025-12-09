@@ -535,7 +535,7 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nVars = solution->getNumberOfVariables();
 
     if (nVars < 2 * nJobs) return;
-    if (nJobs <= 2) return; // 0 と nJobs-1 が固定なので意味がない
+    if (nJobs <= 2) return; // 0 と nJobs-1 が固定
 
     // 候補ジョブのリスト（0 と nJobs-1 は除外）
     std::vector<int> jobs;
@@ -600,6 +600,91 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
         }
     }
 }
+
+
+// ランダム・トポロジカル順の個体を1つ生成
+
+Solution* RCPSP_Problem::createRandomTopoSolution() {
+    int nJobs = numberOfJobs_;
+    int nVars = numberOfVariables_;
+
+    Solution* sol = new Solution(this);
+    Variable** vars = sol->getDecisionVariables();
+
+
+
+    // 入次数を数える
+    std::vector<int> indeg(nJobs, 0);
+    for (int j = 0; j < nJobs; ++j) {
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                ++indeg[succ];
+            }
+        }
+    }
+
+    // 入次数0のノード集合
+    std::vector<int> avail;
+    avail.reserve(nJobs);
+    for (int j = 0; j < nJobs; ++j) {
+        if (indeg[j] == 0) {
+            avail.push_back(j);
+        }
+    }
+
+    std::vector<int> perm;
+    perm.reserve(nJobs);
+
+    while (!avail.empty()) {
+
+        std::uniform_int_distribution<int> dist(0, (int)avail.size() - 1);
+        int idx = dist(rng);
+        int j = avail[idx];
+
+
+        avail[idx] = avail.back();
+        avail.pop_back();
+
+        // 出力順列に追加
+        perm.push_back(j);
+
+
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                if (--indeg[succ] == 0) {
+                    avail.push_back(succ);
+                }
+            }
+        }
+    }
+
+    // 何らかの理由でトポロジカルソートに失敗した場合
+    if ((int)perm.size() != nJobs) {
+        perm.resize(nJobs);
+        std::iota(perm.begin(), perm.end(), 0);
+    }
+
+    // 2. 解の前半に permutation を書き込む
+    for (int i = 0; i < nJobs; ++i) {
+        vars[i]->setValue((double)perm[i]);
+    }
+
+    //  後半の schedObj ビットを設定
+    // とりあえず全部 0 makespan優先 にしておく
+    for (int j = 0; j < nJobs; ++j) {
+        int idx = nJobs + j;
+        if (idx < nVars) {
+            vars[idx]->setValue(0.0);
+        }
+    }
+    // 再確認
+    if (nJobs > 0 && nJobs < nVars)   vars[nJobs + 0]->setValue(0.0);
+    if (nJobs > 1 && nJobs + nJobs - 1 < nVars)
+        vars[nJobs + nJobs - 1]->setValue(0.0);
+
+    return sol;
+}
+
 
 
 

@@ -12,7 +12,10 @@ class Solution;
 
 class RCPSP_Problem : public Problem {
 public:
-    // ★ ここが局所探索の公開メソッド宣言
+    // ここが局所探索の公開メソッド宣言
+    // ランダム・トポロジカル順の Solution
+    Solution* createRandomTopoSolution();
+
     void localSearchOnSchedObj(Solution *solution, int maxLSMoves = 10);
 
     explicit RCPSP_Problem(const std::string &filename, int strategy = 1);
@@ -43,7 +46,7 @@ public:
             if (indeg[i] == 0) zero.push_back(i);
         }
 
-        // 乱数エンジン
+        // 乱数
         static std::mt19937 gen(seed);
 
         std::vector<int> order;

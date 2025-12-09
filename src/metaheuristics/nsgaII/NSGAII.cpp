@@ -36,9 +36,9 @@ SolutionSet *NSGAII::execute() {
         }
     }
 
-    // -------------------------
+
     // 初期個体生成
-    // -------------------------
+
     population = new SolutionSet(populationSize);
     int filled = 0;
 
@@ -54,18 +54,25 @@ SolutionSet *NSGAII::execute() {
         std::cout << "[NSGAII] Seeded " << filled << " solutions from initialPopulation\n";
     }
 
-    // 残りは従来どおりランダム生成
+    //ランダムトポロジカルソートで生成
     for (; filled < populationSize; ++filled) {
-        Solution *sol = new Solution(problem_);
+        Solution *sol = nullptr;
+
+        if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+            sol = rcpsp->createRandomTopoSolution();  // 先ほど作った関数
+        } else {
+            sol = new Solution(problem_);
+        }
+
         problem_->evaluate(sol);
         population->add(sol);
     }
 
     evaluations = population->size();
 
-    // -------------------------
+
     // メインループ
-    // -------------------------
+
     while (evaluations < maxEvaluations) {
         std::cout << "evaluations = " << evaluations << std::endl;
 
@@ -92,12 +99,14 @@ SolutionSet *NSGAII::execute() {
             problem_->evaluate(c1);
             problem_->evaluate(c2);
 
-            //  ここで RCPSP 用の局所探索を追加
-            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-                // -1 or 0 なら「改善できなくなるまで」
-                rcpsp->localSearchOnSchedObj(c1, -1);
-                rcpsp->localSearchOnSchedObj(c2, -1);
-            }
+            // ここで RCPSP 用の局所探索を追加
+            // if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+            //     // -1 or 0 なら「改善できなくなるまで」
+            //     rcpsp->localSearchOnSchedObj(c1, -1);
+            //     rcpsp->localSearchOnSchedObj(c2, -1);
+            // }
+
+
 
 
             offspringPopulation->add(c1);
