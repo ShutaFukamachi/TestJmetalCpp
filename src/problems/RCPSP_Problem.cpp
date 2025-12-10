@@ -259,9 +259,11 @@ static void buildMaxShiftVector(
 
 // ==== コンストラクタ ====
 RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy)
-        : Problem(), strategy_(strategy), instance(readPSPLIB_SM(filename)) {
+        : Problem(), strategy_(strategy),instance(readPSPLIB_SM(filename)){
 
     std::cout << "[RCPSP_Problem] Loading instance from " << filename << std::endl;
+
+
 
     numberOfJobs_ = instance.nJobs;
 
@@ -535,40 +537,300 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nVars = solution->getNumberOfVariables();
 
     if (nVars < 2 * nJobs) return;
-    if (nJobs <= 2) return; // 0 と nJobs-1 が固定なので意味がない
+    if (nJobs <= 2) return; // 0 と nJobs-1 が固定
 
-    std::uniform_int_distribution<int> pickJob(1, nJobs - 2); // 0, nJobs-1 は固定
+    // 候補ジョブのリスト（0 と nJobs-1 は除外）
+    std::vector<int> jobs;
+    for (int j = 1; j <= nJobs - 2; ++j) {
+        jobs.push_back(j);
+    }
+    if (jobs.empty()) return;
 
-    for (int iter = 0; iter < maxLSMoves; ++iter) {
-        int j = pickJob(rng);
+    int acceptedMoves = 0;
 
-        // 近傍解を複製
-        Solution *neighbor = new Solution(solution);
+    // 改善が見つからなくなるまで繰り返す
+    while (true) {
+        bool improvedInThisSweep = false;
 
-        Variable **varsN = neighbor->getDecisionVariables();
-        int schedIndex = nJobs + j;  // 後半が schedObj
+        // ジョブ集合を毎回シャッフルしてから全探索
+        std::shuffle(jobs.begin(), jobs.end(), rng);
 
-        int old = (int)varsN[schedIndex]->getValue();
-        varsN[schedIndex]->setValue(1 - old);  // 0↔1 反転
+        for (int idx = 0; idx < (int)jobs.size(); ++idx) {
+            int j = jobs[idx];
 
-        // 評価
-        this->evaluate(neighbor);
+            // 近傍解を複製
+            Solution *neighbor = new Solution(solution);
+
+            Variable **varsN = neighbor->getDecisionVariables();
+            int schedIndex = nJobs + j;  // 後半が schedObj
+
+            int old = (int)varsN[schedIndex]->getValue();
+            varsN[schedIndex]->setValue(1 - old);  // 0 <-> 1 反転
+
+            // 評価
+            this->evaluate(neighbor);
+
+            // 近傍が現在の解をパレート優越するなら、その場で受け入れ
+            if (dominatesSolution(neighbor, solution)) {
+                Variable **varsS = solution->getDecisionVariables();
+                for (int k = 0; k < nVars; ++k) {
+                    varsS[k]->setValue(varsN[k]->getValue());
+                }
+                for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
+                    solution->setObjective(o, neighbor->getObjective(o));
+                }
+
+                improvedInThisSweep = true;
+                ++acceptedMoves;
+                delete neighbor;
 
 
-        if (dominatesSolution(neighbor, solution)) {
-            //cout << " dominated " << endl;
-            Variable **varsS = solution->getDecisionVariables();
-            for (int k = 0; k < nVars; ++k) {
-                varsS[k]->setValue(varsN[k]->getValue());
+                break;
             }
-            for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
-                solution->setObjective(o, neighbor->getObjective(o));
-            }
+
+            delete neighbor;
         }
 
-        delete neighbor;
+        // このスイープで一度も改善が見つからなければ終了
+        if (!improvedInThisSweep) {
+            break;
+        }
+
+
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
     }
 }
+
+void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMoves) {
+    int nJobs = numberOfJobs_;
+    int nVars = solution->getNumberOfVariables();
+    if (nJobs <= 2) return;
+    if (nVars < 2 * nJobs) return;
+
+    Variable **vars = solution->getDecisionVariables();
+
+
+    std::vector<int> seq(nJobs);
+    for (int i = 0; i < nJobs; ++i) {
+        seq[i] = (int)vars[i]->getValue();
+    }
+    //トポロジカルでないなら何もしない
+    if (!checkTopological(seq)) {
+        return;
+    }
+
+
+    std::vector<std::vector<int>> preds(nJobs);
+    for (int j = 0; j < nJobs; ++j) {
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                preds[succ].push_back(j);
+            }
+        }
+    }
+
+    int acceptedMoves = 0;
+
+    // 改善が出なくなるまで繰り返す
+    while (true) {
+        bool improvedInThisSweep = false;
+
+        // 位置 i<j の全ペアを作る
+        std::vector<std::pair<int,int>> candPairs;
+        for (int i = 0; i < nJobs - 1; ++i) {
+            for (int j = i + 1; j < nJobs; ++j) {
+
+                if (seq[i] == 0 || seq[i] == nJobs-1) continue;
+                if (seq[j] == 0 || seq[j] == nJobs-1) continue;
+                candPairs.emplace_back(i, j);
+            }
+        }
+        if (candPairs.empty()) break;
+
+
+        std::shuffle(candPairs.begin(), candPairs.end(), rng);
+
+
+        std::vector<int> pos(nJobs);
+        for (int p = 0; p < nJobs; ++p) {
+            pos[seq[p]] = p;
+        }
+
+        for (auto &pr : candPairs) {
+            int i = pr.first;
+            int j = pr.second;
+            if (i >= j) continue;
+
+            int a = seq[i];   // i にいる job
+            int b = seq[j];   // j にいる job
+
+            // precedence を壊さないかチェック
+
+
+            bool bad = false;
+            for (int s : instance.successors[a]) {
+                if (s == b) { bad = true; break; }
+            }
+            if (!bad) {
+                for (int s : instance.successors[b]) {
+                    if (s == a) { bad = true; break; }
+                }
+            }
+            if (bad) continue;
+
+            // i〜j の間に「a の後続」がいないか
+            for (int s : instance.successors[a]) {
+                int ps = pos[s];
+                if (i < ps && ps < j) {
+                    bad = true;
+                    break;
+                }
+            }
+            if (bad) continue;
+
+            // i〜j の間に「b の先行」がいないか
+            for (int pPred : preds[b]) {
+                int pp = pos[pPred];
+                if (i < pp && pp < j) {
+                    bad = true;
+                    break;
+                }
+            }
+            if (bad) continue;
+
+            //swap した近傍解を評価
+            Solution *neighbor = new Solution(solution);
+            Variable **varsN = neighbor->getDecisionVariables();
+
+            // 順序部分だけ swap
+            double vi = varsN[i]->getValue();
+            double vj = varsN[j]->getValue();
+            varsN[i]->setValue(vj);
+            varsN[j]->setValue(vi);
+
+            // 評価
+            this->evaluate(neighbor);
+
+            if (dominatesSolution(neighbor, solution)) {
+                // 改善なら採用
+                Variable **varsS = solution->getDecisionVariables();
+                for (int k = 0; k < nVars; ++k) {
+                    varsS[k]->setValue(varsN[k]->getValue());
+                }
+                for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
+                    solution->setObjective(o, neighbor->getObjective(o));
+                }
+
+
+                std::swap(seq[i], seq[j]);
+
+                improvedInThisSweep = true;
+                ++acceptedMoves;
+                delete neighbor;
+                break;
+            }
+
+            delete neighbor;
+        }
+
+        if (!improvedInThisSweep) {
+            // 改善がなければ局所最適
+            break;
+        }
+
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
+    }
+}
+
+
+// ランダム・トポロジカル順の個体を1つ生成
+
+Solution* RCPSP_Problem::createRandomTopoSolution() {
+    int nJobs = numberOfJobs_;
+    int nVars = numberOfVariables_;
+
+    Solution* sol = new Solution(this);
+    Variable** vars = sol->getDecisionVariables();
+
+
+
+    // 入次数を数える
+    std::vector<int> indeg(nJobs, 0);
+    for (int j = 0; j < nJobs; ++j) {
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                ++indeg[succ];
+            }
+        }
+    }
+
+    // 入次数0のノード集合
+    std::vector<int> avail;
+    avail.reserve(nJobs);
+    for (int j = 0; j < nJobs; ++j) {
+        if (indeg[j] == 0) {
+            avail.push_back(j);
+        }
+    }
+
+    std::vector<int> perm;
+    perm.reserve(nJobs);
+
+    while (!avail.empty()) {
+
+        std::uniform_int_distribution<int> dist(0, (int)avail.size() - 1);
+        int idx = dist(rng);
+        int j = avail[idx];
+
+
+        avail[idx] = avail.back();
+        avail.pop_back();
+
+        // 出力順列に追加
+        perm.push_back(j);
+
+
+        for (int succ : instance.successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                if (--indeg[succ] == 0) {
+                    avail.push_back(succ);
+                }
+            }
+        }
+    }
+
+    // 何らかの理由でトポロジカルソートに失敗した場合
+    if ((int)perm.size() != nJobs) {
+        perm.resize(nJobs);
+        std::iota(perm.begin(), perm.end(), 0);
+    }
+
+    // 2. 解の前半に permutation を書き込む
+    for (int i = 0; i < nJobs; ++i) {
+        vars[i]->setValue((double)perm[i]);
+    }
+
+    //  後半の schedObj ビットを設定
+    // とりあえず全部 0 makespan優先 にしておく
+    for (int j = 0; j < nJobs; ++j) {
+        int idx = nJobs + j;
+        if (idx < nVars) {
+            vars[idx]->setValue(0.0);
+        }
+    }
+    // 再確認
+    if (nJobs > 0 && nJobs < nVars)   vars[nJobs + 0]->setValue(0.0);
+    if (nJobs > 1 && nJobs + nJobs - 1 < nVars)
+        vars[nJobs + nJobs - 1]->setValue(0.0);
+
+    return sol;
+}
+
+
 
 
 

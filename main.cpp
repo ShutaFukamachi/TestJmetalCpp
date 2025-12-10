@@ -113,11 +113,10 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
 }
 
 
-// main
 
 int main(int argc, char **argv) {
 
-    string instanceFile = "j3033_1.sm";
+    string instanceFile = "j30.sm/j3033_1.sm";
     if (argc >= 2) {
         instanceFile = argv[1];
     }
@@ -131,7 +130,7 @@ int main(int argc, char **argv) {
     Algorithm *algorithm = new NSGAII(problem);
 
     int populationSize = 100;
-    int maxEvaluations = 20000;
+    int maxEvaluations = 2000;
 
     // RCPSP_Problem 固有の maxEvaluations セッタはこれまで通り
     dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
@@ -146,36 +145,45 @@ int main(int argc, char **argv) {
 
     // AUGMECON の 2 解を初期個体として注入
 
-    SolutionSet *seedPopulation = new SolutionSet(2);
-
-    // Cmax 最適解
-    {
-        std::vector<int> stCmax;
-        if (loadStartTimesFromSol("schedule_Cmax_opt_HCmax.sol",
-                                  stCmax,
-                                  nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCmax);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-        }
-    }
-
-    // Cost 最適解
-    {
-        std::vector<int> stCost;
-        if (loadStartTimesFromSol("schedule_Cost_opt.sol",
-                                  stCost,
-                                  nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCost);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-        }
-    }
-
-
-    algorithm->setInputParameter("initialPopulation", seedPopulation);
+//     SolutionSet *seedPopulation = new SolutionSet(2);
+//
+//     // Cmax 最適解
+//     {
+//         std::vector<int> stCmax;
+//         if (loadStartTimesFromSol("schedule_Cmax_opt_HCmax.sol",
+//                                   stCmax,
+//                                   nJobs)) {
+//             Solution *s = buildSolutionFromStartTimes(problem, stCmax);
+//             problem->evaluate(s);
+//             seedPopulation->add(s);
+//             std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
+//         }
+//     }
+//
+//     // Cost 最適解
+//     {
+//         std::vector<int> stCost;
+//         if (loadStartTimesFromSol("schedule_Cost_opt.sol",
+//                                   stCost,
+//                                   nJobs)) {
+//             Solution *s = buildSolutionFromStartTimes(problem, stCost);
+//             problem->evaluate(s);
+//             seedPopulation->add(s);
+//             std::cout << "[main] Seeded Cost-opt solution." << std::endl;
+//         }
+//     }
+// //SEED の f1, f2 を出力する部分
+//     if (seedPopulation->size() > 0) {
+//         std::cout << "\n[DEBUG] Evaluate seed solutions\n";
+//         for (int i = 0; i < seedPopulation->size(); ++i) {
+//             Solution* s = seedPopulation->get(i);
+//             std::cout << "[SEED " << i << "] f1=" << s->getObjective(0)
+//                       << " f2=" << s->getObjective(1) << std::endl;
+//         }
+//         std::cout << std::endl;
+//     }
+//
+//      algorithm->setInputParameter("initialPopulation", seedPopulation);
 
     cout << "       populationSize : " << populationSize << endl;
     cout << "       maxEvaluations : " << maxEvaluations << endl;
