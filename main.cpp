@@ -646,7 +646,7 @@ bool loadStartTimesFromSol(const std::string &filename,
 
 
 Solution *buildSolutionFromStartTimes(Problem *problem,
-                                      const std::vector<int> &startTimes) {
+                                      const std::vector<int> &startTimes, double initial_val) {
     int nJobs = (int)startTimes.size();
 
     Solution *sol = new Solution(problem);
@@ -673,7 +673,7 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
         if (idx < nVars) {
-            vars[idx]->setValue(0.0);
+            vars[idx]->setValue(initial_val);
         }
     }
 
@@ -727,56 +727,56 @@ int main(int argc, char **argv) {
     int nJobs = problem->getNumberOfVariables() / 2;
 
     // AUGMECON の 2 解を初期個体として注入
-    // SolutionSet *seedPopulation = new SolutionSet(2);
-    //
-    // // Cmax 最適解
-    // {
-    //     std::vector<int> stCmax;
-    //     if (loadStartTimesFromSol("schedule_Cmax_opt.sol",
-    //                               stCmax,
-    //                               nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCmax);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cmax-opt solution NOT seeded "
-    //                      "(file not found or read error)." << std::endl;
-    //     }
-    // }
-    //
-    // // Cost 最適解
-    // {
-    //     std::vector<int> stCost;
-    //     if (loadStartTimesFromSol("schedule_Cost_opt.sol",
-    //                               stCost,
-    //                               nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCost);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cost-opt solution NOT seeded "
-    //                      "(file not found or read error)." << std::endl;
-    //     }
-    // }
-    //
-    // // SEED の f1, f2 を確認
-    // if (seedPopulation->size() > 0) {
-    //     std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
-    //     for (int i = 0; i < seedPopulation->size(); ++i) {
-    //         Solution* s = seedPopulation->get(i);
-    //         std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
-    //                   << " f2=" << s->getObjective(1) << std::endl;
-    //     }
-    //     std::cout << std::endl;
-    // } else {
-    //     std::cout << "[WARN] No seed solutions were added; "
-    //                  "NSGA-II will start from random population only.\n";
-    // }
-    //
-    // // NSGA-II に初期個体集合を渡す
-    // algorithm->setInputParameter("initialPopulation", seedPopulation);
+    SolutionSet *seedPopulation = new SolutionSet(2);
+
+    // Cmax 最適解
+    {
+        std::vector<int> stCmax;
+        if (loadStartTimesFromSol("schedule_Cmax_opt.sol",
+                                  stCmax,
+                                  nJobs)) {
+            Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
+            problem->evaluate(s);
+            seedPopulation->add(s);
+            std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
+        } else {
+            std::cout << "[main] Cmax-opt solution NOT seeded "
+                         "(file not found or read error)." << std::endl;
+        }
+    }
+
+    // Cost 最適解
+    {
+        std::vector<int> stCost;
+        if (loadStartTimesFromSol("schedule_Cost_opt.sol",
+                                  stCost,
+                                  nJobs)) {
+            Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
+            problem->evaluate(s);
+            seedPopulation->add(s);
+            std::cout << "[main] Seeded Cost-opt solution." << std::endl;
+        } else {
+            std::cout << "[main] Cost-opt solution NOT seeded "
+                         "(file not found or read error)." << std::endl;
+        }
+    }
+
+    // SEED の f1, f2 を確認
+    if (seedPopulation->size() > 0) {
+        std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
+        for (int i = 0; i < seedPopulation->size(); ++i) {
+            Solution* s = seedPopulation->get(i);
+            std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
+                      << " f2=" << s->getObjective(1) << std::endl;
+        }
+        std::cout << std::endl;
+    } else {
+        std::cout << "[WARN] No seed solutions were added; "
+                     "NSGA-II will start from random population only.\n";
+    }
+
+    // NSGA-II に初期個体集合を渡す
+    algorithm->setInputParameter("initialPopulation", seedPopulation);
 
     cout << "       populationSize : " << populationSize << endl;
     cout << "       maxEvaluations : " << maxEvaluations << endl;
