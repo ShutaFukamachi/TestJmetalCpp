@@ -114,8 +114,8 @@ static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
 }
 
 // horizon T に対して全資源のコスト系列を生成
-//  1) costs.csv があればそれを使う
-//  2) なければ論文パターンに従ってランダム生成
+//  costs.csv があればそれを使う
+//   なければ論文パターンに従ってランダム生成
 static void generateCostSeries(int R, int T) {
     // まず costs.csv を試す
     if (loadCostTableFromCSV("costs.csv", R)) {
@@ -809,7 +809,7 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    // 2. 解の前半に permutation を書き込む
+    // 解の前半に permutation を書き込む
     for (int i = 0; i < nJobs; ++i) {
         vars[i]->setValue((double)perm[i]);
     }

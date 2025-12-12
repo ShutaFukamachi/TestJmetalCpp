@@ -46,7 +46,7 @@ SolutionSet *NSGAII::execute() {
         int seedSize = seedPopulation->size();
         for (int i = 0; i < seedSize && filled < populationSize; ++i) {
             Solution *orig = seedPopulation->get(i);
-            Solution *copy = new Solution(orig); // コピーコンストラクタ
+            Solution *copy = new Solution(orig);
             problem_->evaluate(copy);
             population->add(copy);
             ++filled;

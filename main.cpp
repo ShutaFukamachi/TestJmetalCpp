@@ -356,8 +356,12 @@ pair<double,double> solveModel_AUG(InstanceAUG &inst,
 
     GRBModel model(env);
     model.set(GRB_IntParam_OutputFlag, 0);
-    model.set(GRB_DoubleParam_TimeLimit, 600);
-    model.set(GRB_DoubleParam_MIPGap, 0.01);
+
+    double timeLimitSec = 600.0;   // 好きな値
+    double mipGap       = 1.0;     // 実質 GAP では止めない
+
+    model.set(GRB_DoubleParam_TimeLimit, timeLimitSec);
+    model.set(GRB_DoubleParam_MIPGap, mipGap);
     model.set(GRB_DoubleParam_NodefileStart, 0.5);
     model.set(GRB_IntParam_Threads, 4);
 
@@ -507,9 +511,8 @@ void runAUGMECON(const std::string &instanceFile) {
     int sink  = inst.nJobs - 1;
     int cpLen = inst.jobs[sink].ES + inst.jobs[sink].duration;
 
-    int H_Cost = choose_H_cost_AUG(inst, cpLen);
-    H_Cost     = std::min(inst.horizon, H_Cost);
-    int H_Cmax = H_Cost;
+    int H_Cost = inst.horizon;
+    int H_Cmax = inst.horizon;
 
     // コスト系列は horizon まで作る
     int Hmax   = inst.horizon;
@@ -520,18 +523,47 @@ void runAUGMECON(const std::string &instanceFile) {
          << " (horizon = " << inst.horizon << ")\n";
 
     RNG_AUG rng;
-    vector<vector<double>> costs = generateCosts_AUG(inst.nRes, Hmax, rng);
+    vector<vector<double>> costs ;
 
     // NSGA-II 側で costs.csv を出力
     {
-        std::ofstream fout("costs.csv");
-        if (!fout) {
-            std::cerr << "[AUG] Cannot open costs.csv for writing\n";
-            throw std::runtime_error("Cannot open costs.csv for writing");
+        std::ifstream fin("costs.csv");
+        if (fin) {
+            int R, T;
+            if (fin >> R >> T && R == inst.nRes) {
+                costs.assign(R, std::vector<double>(T, 0.0));
+                for (int k = 0; k < R; ++k) {
+                    for (int t = 0; t < T; ++t) {
+                        if (!(fin >> costs[k][t])) {
+                            throw std::runtime_error(
+                                "[AUG] Failed to read costs.csv data");
+                        }
+                    }
+                }
+                std::cout << "[AUG] Reusing existing costs.csv (R="
+                          << R << ", T=" << T << ")\n";
+            } else {
+                std::cout << "[AUG] costs.csv header mismatch. "
+                             "Regenerating cost table.\n";
+                costs.clear();
+            }
         }
+    }
+
+    // 読み込みに失敗した場合だけ新しく作る
+    if (costs.empty()) {
         int R = inst.nRes;
         int T = Hmax;
 
+        costs = generateCosts_AUG(R, T, rng);
+        std::cout << "[AUG] Generated new random costs (R="
+                  << R << ", T=" << T << ")\n";
+
+        // 一度だけ costs.csv を保存
+        std::ofstream fout("costs.csv");
+        if (!fout) {
+            throw std::runtime_error("[AUG] Cannot open costs.csv for writing");
+        }
         fout << R << " " << T << "\n";
         for (int k = 0; k < R; ++k) {
             for (int t = 0; t < T; ++t) {
@@ -669,7 +701,7 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
         vars[i]->setValue((double)jobs[i]);
     }
 
-    // 後半の schedObj ビットは一旦 0
+    // 後半の schedObj ビットは一旦 0（これだめ）
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
         if (idx < nVars) {
@@ -727,56 +759,56 @@ int main(int argc, char **argv) {
     int nJobs = problem->getNumberOfVariables() / 2;
 
     // AUGMECON の 2 解を初期個体として注入
-    SolutionSet *seedPopulation = new SolutionSet(2);
-
-    // Cmax 最適解
-    {
-        std::vector<int> stCmax;
-        if (loadStartTimesFromSol("schedule_Cmax_opt.sol",
-                                  stCmax,
-                                  nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-        } else {
-            std::cout << "[main] Cmax-opt solution NOT seeded "
-                         "(file not found or read error)." << std::endl;
-        }
-    }
-
-    // Cost 最適解
-    {
-        std::vector<int> stCost;
-        if (loadStartTimesFromSol("schedule_Cost_opt.sol",
-                                  stCost,
-                                  nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-        } else {
-            std::cout << "[main] Cost-opt solution NOT seeded "
-                         "(file not found or read error)." << std::endl;
-        }
-    }
-
-    // SEED の f1, f2 を確認
-    if (seedPopulation->size() > 0) {
-        std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
-        for (int i = 0; i < seedPopulation->size(); ++i) {
-            Solution* s = seedPopulation->get(i);
-            std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
-                      << " f2=" << s->getObjective(1) << std::endl;
-        }
-        std::cout << std::endl;
-    } else {
-        std::cout << "[WARN] No seed solutions were added; "
-                     "NSGA-II will start from random population only.\n";
-    }
-
-    // NSGA-II に初期個体集合を渡す
-    algorithm->setInputParameter("initialPopulation", seedPopulation);
+    // SolutionSet *seedPopulation = new SolutionSet(2);
+    //
+    // // Cmax 最適解
+    // {
+    //     std::vector<int> stCmax;
+    //     if (loadStartTimesFromSol("schedule_Cmax_opt.sol",
+    //                               stCmax,
+    //                               nJobs)) {
+    //         Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
+    //         problem->evaluate(s);
+    //         seedPopulation->add(s);
+    //         std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
+    //     } else {
+    //         std::cout << "[main] Cmax-opt solution NOT seeded "
+    //                      "(file not found or read error)." << std::endl;
+    //     }
+    // }
+    //
+    // // Cost 最適解
+    // {
+    //     std::vector<int> stCost;
+    //     if (loadStartTimesFromSol("schedule_Cost_opt.sol",
+    //                               stCost,
+    //                               nJobs)) {
+    //         Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
+    //         problem->evaluate(s);
+    //         seedPopulation->add(s);
+    //         std::cout << "[main] Seeded Cost-opt solution." << std::endl;
+    //     } else {
+    //         std::cout << "[main] Cost-opt solution NOT seeded "
+    //                      "(file not found or read error)." << std::endl;
+    //     }
+    // }
+    //
+    // // SEED の f1, f2 を確認
+    // if (seedPopulation->size() > 0) {
+    //     std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
+    //     for (int i = 0; i < seedPopulation->size(); ++i) {
+    //         Solution* s = seedPopulation->get(i);
+    //         std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
+    //                   << " f2=" << s->getObjective(1) << std::endl;
+    //     }
+    //     std::cout << std::endl;
+    // } else {
+    //     std::cout << "[WARN] No seed solutions were added; "
+    //                  "NSGA-II will start from random population only.\n";
+    // }
+    //
+    // // NSGA-II に初期個体集合を渡す
+    // algorithm->setInputParameter("initialPopulation", seedPopulation);
 
     cout << "       populationSize : " << populationSize << endl;
     cout << "       maxEvaluations : " << maxEvaluations << endl;
