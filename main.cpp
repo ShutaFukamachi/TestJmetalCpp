@@ -1,18 +1,7 @@
-#include <iostream>
-#include <string>
-#include <map>
-#include <fstream>
-#include <vector>
-#include <algorithm>
-#include <sstream>
-#include <stdexcept>
-#include <cctype>
-#include <queue>
-#include <random>
-#include <iomanip>
-#include <cmath>
+#include <limits>
 
 #include "gurobi_c++.h"
+#include <queue>
 
 #include "core/Problem.h"
 #include "core/Algorithm.h"
@@ -31,12 +20,6 @@
 using namespace std;
 
 
-// AUGMECON 部分
-
-
-// 小さいインスタンスモード (j30, j60 のとき有効)
-#define SMALL_INSTANCE_MODE
-
 struct ActivityAUG {
     int id = -1;
     int duration = 0;
@@ -53,6 +36,7 @@ struct InstanceAUG {
     vector<ActivityAUG> jobs;
 };
 
+// ----- helper: parse last int in a string -----
 static bool parseLastInt_AUG(const std::string& s, int& out) {
     std::istringstream iss(s);
     std::string token;
@@ -61,7 +45,7 @@ static bool parseLastInt_AUG(const std::string& s, int& out) {
     while (iss >> token) {
         size_t i = 0;
         while (i < token.size() &&
-               !(std::isdigit((unsigned char)token[i]) || token[i]=='-')) ++i;
+               !(std::isdigit((unsigned char)token[i]) || token[i] == '-')) ++i;
         if (i < token.size()) {
             bool neg = false;
             if (token[i] == '-') { neg = true; ++i; }
@@ -69,7 +53,7 @@ static bool parseLastInt_AUG(const std::string& s, int& out) {
             bool anydigit = false;
             while (i < token.size() && std::isdigit((unsigned char)token[i])) {
                 anydigit = true;
-                v = v*10 + (token[i]-'0');
+                v = v * 10 + (token[i] - '0');
                 ++i;
             }
             if (anydigit) {
@@ -83,7 +67,7 @@ static bool parseLastInt_AUG(const std::string& s, int& out) {
     return false;
 }
 
-// PSPLIB 読み込み (AUGMECON 用)
+// ----- PSPLIB SM reader for AUG -----
 InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
     std::ifstream in(filename);
     if (!in) throw std::runtime_error("Could not open file: " + filename);
@@ -91,7 +75,7 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
     InstanceAUG inst;
     std::string line;
 
-    // 1 周目ヘッダから jobs/horizon/renewable を取得
+    // header: jobs / horizon / renewable
     in.clear(); in.seekg(0);
     while (std::getline(in, line)) {
         if (line.find("jobs (incl. supersource/sink") != std::string::npos) {
@@ -107,9 +91,7 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
             inst.horizon = v;
         } else if (line.find("- renewable") != std::string::npos) {
             int v;
-            if (!parseLastInt_AUG(line, v))
-                continue;
-            inst.nRes = v;
+            if (parseLastInt_AUG(line, v)) inst.nRes = v;
         }
     }
 
@@ -129,8 +111,8 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
             std::getline(in, line); // header skip
             int read = 0;
             while (read < inst.nJobs && std::getline(in, line)) {
-                if (line.find_first_not_of(" \t\r\n") == std::string::npos)
-                    continue;
+                if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+
                 std::istringstream iss(line);
                 int id, nmodes, nsucc;
                 if (!(iss >> id >> nmodes >> nsucc)) {
@@ -141,17 +123,18 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
                     if (tokens.size() >= 3) {
                         id = tokens[0]; nmodes = tokens[1]; nsucc = tokens[2];
                         inst.jobs[id-1].successors.clear();
-                        for (size_t k=3;
-                             k<tokens.size() &&
+                        for (size_t k = 3;
+                             k < tokens.size() &&
                              (int)inst.jobs[id-1].successors.size() < nsucc;
-                             ++k)
-                            inst.jobs[id-1].successors.push_back(tokens[k]-1);
+                             ++k) {
+                            inst.jobs[id-1].successors.push_back(tokens[k] - 1);
+                        }
                         ++read;
                         continue;
                     }
-                    throw std::runtime_error(
-                        "Failed to read PRECEDENCE line: " + line);
+                    throw std::runtime_error("Failed to read PRECEDENCE line: " + line);
                 }
+
                 int idx = id - 1;
                 inst.jobs[idx].successors.clear();
                 for (int k = 0; k < nsucc; ++k) {
@@ -169,29 +152,25 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
     while (std::getline(in, line)) {
         if (line.find("REQUESTS/DURATIONS") != std::string::npos) {
             if (!std::getline(in, line))
-                throw std::runtime_error(
-                    "Unexpected EOF after REQUESTS/DURATIONS");
+                throw std::runtime_error("Unexpected EOF after REQUESTS/DURATIONS");
 
             int read = 0;
             while (read < inst.nJobs && std::getline(in, line)) {
                 bool hasDigit = false;
                 for (char c : line) {
-                    if (std::isdigit((unsigned char)c)) {
-                        hasDigit = true; break;
-                    }
+                    if (std::isdigit((unsigned char)c)) { hasDigit = true; break; }
                 }
                 if (!hasDigit) continue;
 
                 std::istringstream iss(line);
-                int id=0, mode=0, dur=0;
+                int id = 0, mode = 0, dur = 0;
                 if (!(iss >> id >> mode >> dur)) {
                     std::vector<int> tokens;
                     std::istringstream iss2(line);
                     int x;
                     while (iss2 >> x) tokens.push_back(x);
                     if (tokens.size() < 3)
-                        throw std::runtime_error(
-                            "Bad REQUESTS/DURATIONS line: " + line);
+                        throw std::runtime_error("Bad REQUESTS/DURATIONS line: " + line);
                     id = tokens[0]; mode = tokens[1]; dur = tokens[2];
                 }
                 int idx = id - 1;
@@ -204,10 +183,8 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
                         std::string more;
                         while (!(iss >> d)) {
                             if (!std::getline(in, more))
-                                throw std::runtime_error(
-                                    "Unexpected EOF while reading demands.");
-                            if (more.find_first_not_of(" \t\r\n")
-                                == std::string::npos) continue;
+                                throw std::runtime_error("Unexpected EOF while reading demands.");
+                            if (more.find_first_not_of(" \t\r\n") == std::string::npos) continue;
                             iss.clear();
                             iss.str(more);
                         }
@@ -227,20 +204,18 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
             inst.capacity.assign(inst.nRes, 0);
             vector<int> caps;
             while ((int)caps.size() < inst.nRes && std::getline(in, line)) {
-                if (line.find_first_not_of(" \t\r\n") == std::string::npos)
-                    continue;
+                if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
                 std::istringstream iss(line);
                 int v;
                 while (iss >> v) caps.push_back(v);
             }
             if ((int)caps.size() < inst.nRes)
-                throw std::runtime_error(
-                    "Failed to read resource capacities.");
-            for (int r = 0; r < inst.nRes; ++r)
-                inst.capacity[r] = caps[r];
+                throw std::runtime_error("Failed to read resource capacities.");
+            for (int r = 0; r < inst.nRes; ++r) inst.capacity[r] = caps[r];
             break;
         }
     }
+
     if (inst.horizon <= 0) {
         long long sum = 0;
         for (auto &a : inst.jobs) sum += a.duration;
@@ -250,30 +225,31 @@ InstanceAUG readPSPLIB_SM_AUG(const std::string& filename) {
     return inst;
 }
 
-// ES 計算 (AUGMECON 用)
+// ----- ES calculation -----
 void computeEarliestStarts_AUG(InstanceAUG &inst) {
     int N = inst.nJobs;
     vector<int> indeg(N, 0);
-    for (int i=0;i<N;i++)
-        for (int s: inst.jobs[i].successors) indeg[s]++;
+    for (int i = 0; i < N; i++)
+        for (int s : inst.jobs[i].successors) indeg[s]++;
+
     queue<int> q;
-    for (int i=0;i<N;i++) if (indeg[i]==0) q.push(i);
-    vector<int> ES(N,0);
-    while(!q.empty()){
-        int u=q.front(); q.pop();
-        for (int v: inst.jobs[u].successors) {
-            ES[v]=max(ES[v], ES[u]+inst.jobs[u].duration);
-            if(--indeg[v]==0) q.push(v);
+    for (int i = 0; i < N; i++) if (indeg[i] == 0) q.push(i);
+
+    vector<int> ES(N, 0);
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        for (int v : inst.jobs[u].successors) {
+            ES[v] = max(ES[v], ES[u] + inst.jobs[u].duration);
+            if (--indeg[v] == 0) q.push(v);
         }
     }
-    for(int i=0;i<N;i++) inst.jobs[i].ES = ES[i];
+    for (int i = 0; i < N; i++) inst.jobs[i].ES = ES[i];
 }
 
-// コスト系列生成 (AUGMECON 用)
+// ----- cost
 struct RNG_AUG {
     std::mt19937 gen;
     RNG_AUG(): gen((std::random_device())()) {}
-
     double uniform(double a, double b) {
         std::uniform_real_distribution<> d(a,b);
         return d(gen);
@@ -284,27 +260,23 @@ struct RNG_AUG {
     }
 };
 
-vector<double> seasonal_sequence_AUG(double Gamma) {
-    return {
-        0.0, Gamma, 2*Gamma, 3*Gamma, 2*Gamma, Gamma, 0.0,
-        -Gamma, -2*Gamma, -3*Gamma, -2*Gamma, -Gamma
-    };
+static vector<double> seasonal_sequence_AUG(double Gamma) {
+    return {0.0, Gamma, 2*Gamma, 3*Gamma, 2*Gamma, Gamma, 0.0,
+            -Gamma, -2*Gamma, -3*Gamma, -2*Gamma, -Gamma};
 }
 
-vector<vector<double>> generateCosts_AUG(int R, int T, RNG_AUG &rng) {
+static vector<vector<double>> generateCosts_AUG(int R, int T, RNG_AUG &rng) {
     vector<vector<double>> cost(R, vector<double>(T, 0.0));
-    for (int k=0;k<R;k++) {
+    for (int k = 0; k < R; k++) {
         int pattern = (k % 4) + 1;
         double alpha = rng.uniform(100.0, 200.0);
         double beta = 0.0;
         double threshold = (2.0*T > 0) ? (alpha / (2.0 * T)) : 0.0;
 
         if (pattern == 1 || pattern == 3) {
-            if (threshold > 0.1) beta = rng.uniform(0.1, threshold);
-            else beta = 0.1;
+            beta = (threshold > 0.1) ? rng.uniform(0.1, threshold) : 0.1;
         } else {
-            if (threshold > 0.1) beta = rng.uniform(-threshold, -0.1);
-            else beta = -0.1;
+            beta = (threshold > 0.1) ? rng.uniform(-threshold, -0.1) : -0.1;
         }
 
         vector<double> gamma_seq;
@@ -312,10 +284,10 @@ vector<vector<double>> generateCosts_AUG(int R, int T, RNG_AUG &rng) {
             double Gamma = rng.uniform(20.0, 30.0);
             gamma_seq = seasonal_sequence_AUG(Gamma);
         } else {
-            gamma_seq = vector<double>(12, 0.0);
+            gamma_seq.assign(12, 0.0);
         }
 
-        for (int t=0;t<T;t++) {
+        for (int t = 0; t < T; t++) {
             double gamma_t = gamma_seq[t % (int)gamma_seq.size()];
             double omega = rng.normal(0.0, 5.0);
             cost[k][t] = alpha + beta * t + gamma_t + omega;
@@ -324,139 +296,177 @@ vector<vector<double>> generateCosts_AUG(int R, int T, RNG_AUG &rng) {
     return cost;
 }
 
-// H_Cost 自動調整 (AUGMECON 用)
-int choose_H_cost_AUG(const InstanceAUG &inst, int cpLen) {
-    int horizon  = inst.horizon;
-    int slackMax = horizon - cpLen;
+static bool loadCostsCSV(const std::string &path,
+                         int expectedR,
+                         vector<vector<double>> &costs_out) {
+    std::ifstream fin(path);
+    if (!fin) return false;
 
-    if (slackMax <= 0) {
-        return horizon;
-    }
-    if (horizon <= 200) {
-        return horizon;
-    }
+    int R = 0, T = 0;
+    if (!(fin >> R >> T)) return false;
+    if (R != expectedR || R <= 0 || T <= 0) return false;
 
-    double alpha = 0.2;
-    int slack = static_cast<int>(std::round(alpha * slackMax));
-    int Hcost = cpLen + std::max(20, slack);
-    if (Hcost > horizon) Hcost = horizon;
-    return Hcost;
+    vector<vector<double>> costs(R, vector<double>(T, 0.0));
+    for (int k = 0; k < R; ++k) {
+        for (int t = 0; t < T; ++t) {
+            if (!(fin >> costs[k][t])) return false;
+        }
+    }
+    costs_out = std::move(costs);
+    return true;
 }
 
-// Gurobi モデルを解く関数 (AUGMECON 用)
-pair<double,double> solveModel_AUG(InstanceAUG &inst,
-                                   vector<vector<double>> &costs,
-                                   GRBEnv &env, int H,
-                                   string objType, double eps,
-                                   string label,
-                                   double &UB, double &LB, double &GAP,
-                                   int &statusOut, int &solCountOut) {
+static void saveCostsCSV(const std::string &path,
+                         const vector<vector<double>> &costs) {
+    int R = (int)costs.size();
+    int T = (R > 0) ? (int)costs[0].size() : 0;
+    std::ofstream fout(path);
+    if (!fout) throw std::runtime_error("Cannot open " + path + " for writing");
+    fout << R << " " << T << "\n";
+    for (int k = 0; k < R; ++k) {
+        for (int t = 0; t < T; ++t) {
+            fout << costs[k][t];
+            if (t + 1 < T) fout << " ";
+        }
+        fout << "\n";
+    }
+}
 
-    int N = inst.nJobs, R = inst.nRes;
+// ----- new time-indexed single-objective MIP -----
+pair<double,double> solveModelSingleObj_AUG(
+    InstanceAUG &inst,
+    vector<vector<double>> &costs,
+    GRBEnv &env,
+    int H,
+    const string &objType,     // "Cmax" or "Cost"
+    const string &label,
+    double timeLimitSec,
+    double gapTarget,
+    double &UB, double &LB, double &GAP,
+    int &statusOut, int &solCountOut
+) {
+    int N = inst.nJobs;
+    int R = inst.nRes;
 
     GRBModel model(env);
     model.set(GRB_IntParam_OutputFlag, 0);
-
-    double timeLimitSec = 600.0;   // 好きな値
-    double mipGap       = 1.0;     // 実質 GAP では止めない
-
     model.set(GRB_DoubleParam_TimeLimit, timeLimitSec);
-    model.set(GRB_DoubleParam_MIPGap, mipGap);
+    model.set(GRB_DoubleParam_MIPGap, gapTarget);
     model.set(GRB_DoubleParam_NodefileStart, 0.5);
     model.set(GRB_IntParam_Threads, 4);
 
     vector<vector<GRBVar>> y(N);
     vector<int> maxStart(N);
-    for(int j=0;j<N;j++){
-        int p=inst.jobs[j].duration;
-        int es=inst.jobs[j].ES;
-        int ls=H-p;
+
+    for (int j = 0; j < N; ++j) {
+        int p  = inst.jobs[j].duration;
+        int es = inst.jobs[j].ES;
+        int ls = H - p;
         if (ls < es) {
-            throw std::runtime_error("solveModel_AUG: H is too small, ls<es for job " + std::to_string(j+1));
+            throw std::runtime_error("H is too small for job " + std::to_string(j+1));
         }
-        maxStart[j]=ls;
-        y[j].resize(ls-es+1);
-        for(int t=es;t<=ls;t++)
-            y[j][t-es]=model.addVar(0,1,0,GRB_BINARY);
+        maxStart[j] = ls;
+        y[j].resize(ls - es + 1);
+        for (int t = es; t <= ls; ++t) {
+            y[j][t - es] = model.addVar(0.0, 1.0, 0.0, GRB_BINARY);
+        }
     }
-    GRBVar Cmax=model.addVar(0,H,0,GRB_INTEGER);
 
-    // 各ジョブ1回だけ開始
-    for(int j=0;j<N;j++){
-        GRBLinExpr sum=0; int es=inst.jobs[j].ES, ls=maxStart[j];
-        for(int t=es;t<=ls;t++) sum+=y[j][t-es];
-        model.addConstr(sum==1);
+    GRBVar Cmax = model.addVar(0.0, (double)H, 0.0, GRB_INTEGER);
+
+    // each job starts once
+    for (int j = 0; j < N; ++j) {
+        GRBLinExpr sum = 0;
+        int es = inst.jobs[j].ES;
+        int ls = maxStart[j];
+        for (int t = es; t <= ls; ++t) sum += y[j][t - es];
+        model.addConstr(sum == 1);
     }
-    // precedence
-    for(int i=0;i<N;i++) for(int j:inst.jobs[i].successors){
-        int pi=inst.jobs[i].duration;
-        int esi=inst.jobs[i].ES, lsi=maxStart[i];
-        int esj=inst.jobs[j].ES, lsj=maxStart[j];
-        for(int ti=esi;ti<=lsi;ti++)
-            for(int tj=esj;tj<=lsj;tj++)
-                if(tj<ti+pi) model.addConstr(y[i][ti-esi]+y[j][tj-esj]<=1);
+
+    // S[j] expression
+    vector<GRBLinExpr> S(N);
+    for (int j = 0; j < N; ++j) {
+        int es = inst.jobs[j].ES;
+        int ls = maxStart[j];
+        GRBLinExpr Sj = 0;
+        for (int t = es; t <= ls; ++t) Sj += t * y[j][t - es];
+        S[j] = Sj;
     }
-    // resource
-    for(int tau=0;tau<H;tau++){
-        for(int k=0;k<R;k++){
-            GRBLinExpr usage=0;
-            for(int j=0;j<N;j++){
-                int p=inst.jobs[j].duration;
-                int es=inst.jobs[j].ES, ls=maxStart[j];
-                int tmin=max(es,tau-p+1), tmax=min(ls,tau);
-                for(int t=tmin;t<=tmax;t++) usage+=inst.jobs[j].demand[k]*y[j][t-es];
+
+    // precedence: S[i] + p_i <= S[j]
+    for (int i = 0; i < N; ++i) {
+        for (int j : inst.jobs[i].successors) {
+            model.addConstr(S[i] + inst.jobs[i].duration <= S[j]);
+        }
+    }
+
+    // resource constraints
+    for (int tau = 0; tau < H; ++tau) {
+        for (int k = 0; k < R; ++k) {
+            GRBLinExpr usage = 0;
+            for (int j = 0; j < N; ++j) {
+                int p  = inst.jobs[j].duration;
+                int es = inst.jobs[j].ES;
+                int ls = maxStart[j];
+                int tmin = std::max(es, tau - p + 1);
+                int tmax = std::min(ls, tau);
+                for (int t = tmin; t <= tmax; ++t) {
+                    usage += inst.jobs[j].demand[k] * y[j][t - es];
+                }
             }
-            model.addConstr(usage<=inst.capacity[k]);
+            model.addConstr(usage <= inst.capacity[k]);
         }
     }
-    // Cmax 定義
-    for(int j=0;j<N;j++){
-        int p=inst.jobs[j].duration;
-        int es=inst.jobs[j].ES, ls=maxStart[j];
-        GRBLinExpr Sj=0;
-        for(int t=es;t<=ls;t++) Sj+=t*y[j][t-es];
-        model.addConstr(Cmax>=Sj+p);
+
+    // Cmax definition
+    for (int j = 0; j < N; ++j) {
+        model.addConstr(Cmax >= S[j] + inst.jobs[j].duration);
     }
 
-    // Cost 係数
+    // cost coefficients
     vector<vector<double>> coeff(N);
-    for(int j=0;j<N;j++){
-        int p=inst.jobs[j].duration, es=inst.jobs[j].ES, ls=maxStart[j];
-        coeff[j].assign(ls-es+1,0.0);
-        for(int t=es;t<=ls;t++){
-            double csum=0.0;
-            for(int tau=t;tau<t+p && tau<H;tau++)
-                for(int k=0;k<R;k++) csum+=inst.jobs[j].demand[k]*costs[k][tau];
-            coeff[j][t-es]=csum;
+    for (int j = 0; j < N; ++j) {
+        int p  = inst.jobs[j].duration;
+        int es = inst.jobs[j].ES;
+        int ls = maxStart[j];
+        coeff[j].assign(ls - es + 1, 0.0);
+        for (int t = es; t <= ls; ++t) {
+            double csum = 0.0;
+            for (int tau = t; tau < t + p && tau < H; ++tau) {
+                for (int k = 0; k < R; ++k) {
+                    csum += inst.jobs[j].demand[k] * costs[k][tau];
+                }
+            }
+            coeff[j][t - es] = csum;
         }
     }
-    GRBLinExpr Cost=0;
-    for(int j=0;j<N;j++){
-        int es=inst.jobs[j].ES, ls=maxStart[j];
-        for(int t=es;t<=ls;t++) Cost+=coeff[j][t-es]*y[j][t-es];
+
+    GRBLinExpr Cost = 0;
+    for (int j = 0; j < N; ++j) {
+        int es = inst.jobs[j].ES;
+        int ls = maxStart[j];
+        for (int t = es; t <= ls; ++t) {
+            Cost += coeff[j][t - es] * y[j][t - es];
+        }
     }
 
-    // 目的関数
-    if(objType=="Cmax"){
+    if (objType == "Cmax") {
         model.setObjective(GRBLinExpr(Cmax), GRB_MINIMIZE);
-    } else if(objType=="Cost"){
+    } else if (objType == "Cost") {
         model.setObjective(Cost, GRB_MINIMIZE);
-    } else if(objType=="AUG"){
-        double M=1e-6;
-        GRBVar zeta=model.addVar(0,GRB_INFINITY,0,GRB_CONTINUOUS);
-        model.addConstr(Cost+zeta<=eps);
-        model.setObjective(GRBLinExpr(Cmax)-M*zeta, GRB_MINIMIZE);
+    } else {
+        throw std::runtime_error("Unknown objType: " + objType);
     }
 
     model.optimize();
 
-    double Cval = 1e9, costVal = 1e9;
-    UB = 1e9; LB = -1e9; GAP = 1e9;
-
     statusOut   = model.get(GRB_IntAttr_Status);
     solCountOut = model.get(GRB_IntAttr_SolCount);
 
-    if (solCountOut > 0 && (statusOut == GRB_OPTIMAL || statusOut == GRB_TIME_LIMIT)) {
+    double Cval = 1e9, costVal = 1e9;
+    UB = 1e9; LB = -1e9; GAP = 1e9;
+
+    if (solCountOut > 0) {
         UB  = model.get(GRB_DoubleAttr_ObjVal);
         LB  = model.get(GRB_DoubleAttr_ObjBound);
         GAP = model.get(GRB_DoubleAttr_MIPGap);
@@ -464,44 +474,46 @@ pair<double,double> solveModel_AUG(InstanceAUG &inst,
         Cval    = Cmax.get(GRB_DoubleAttr_X);
         costVal = Cost.getValue();
 
+        // write schedule
         vector<int> startTimes(N, -1);
-        for (int j=0; j<N; j++) {
-            int es = inst.jobs[j].ES, ls = maxStart[j];
-            for (int t=es; t<=ls; t++) {
-                if (y[j][t-es].get(GRB_DoubleAttr_X) > 0.5) {
+        for (int j = 0; j < N; ++j) {
+            int es = inst.jobs[j].ES;
+            int ls = maxStart[j];
+            for (int t = es; t <= ls; ++t) {
+                if (y[j][t - es].get(GRB_DoubleAttr_X) > 0.5) {
                     startTimes[j] = t;
                     break;
                 }
             }
         }
-        if(!label.empty()){
+
+        if (!label.empty()) {
             ofstream sol("schedule_" + label + ".sol");
             sol << N << " " << R << "\n";
-            for (int k=0; k<R; k++) sol << inst.capacity[k] << " ";
+            for (int k = 0; k < R; ++k) sol << inst.capacity[k] << " ";
             sol << "\n";
-            for (int j=0; j<N; j++) {
-                sol << j+1 << " " << startTimes[j] << " "
-                    << inst.jobs[j].duration;
-                for (int k=0; k<R; k++) sol << " " << inst.jobs[j].demand[k];
+            for (int j = 0; j < N; ++j) {
+                sol << j+1 << " " << startTimes[j] << " " << inst.jobs[j].duration;
+                for (int k = 0; k < R; ++k) sol << " " << inst.jobs[j].demand[k];
                 sol << "\n";
             }
-            sol.close();
         }
 
         cout << "--- Objective info (" << objType << ", " << label << ") ---\n";
-        cout << " UB  = " << UB  << "\n";
-        cout << " LB  = " << LB  << "\n";
-        cout << " GAP = " << GAP << " (relative)\n";
-
+        cout << " status  = " << statusOut   << "\n";
+        cout << " solCnt  = " << solCountOut << "\n";
+        cout << " UB      = " << UB          << "\n";
+        cout << " LB      = " << LB          << "\n";
+        cout << " GAP     = " << GAP         << " (relative)\n";
     } else {
-        cerr << "No feasible solution found (status=" << statusOut
+        cerr << "[AUG] No feasible solution found (status=" << statusOut
              << ", solCount=" << solCountOut << ")\n";
     }
 
-    return std::make_pair(Cval, costVal);
+    return {Cval, costVal};
 }
 
-// AUGMECON 部分を 1 関数にまとめる
+
 void runAUGMECON(const std::string &instanceFile) {
     cout << "[AUG] Instance file = " << instanceFile << "\n";
 
@@ -511,120 +523,82 @@ void runAUGMECON(const std::string &instanceFile) {
     int sink  = inst.nJobs - 1;
     int cpLen = inst.jobs[sink].ES + inst.jobs[sink].duration;
 
-    int H_Cost = inst.horizon;
-    int H_Cmax = inst.horizon;
-
-    // コスト系列は horizon まで作る
-    int Hmax   = inst.horizon;
-
     cout << "[AUG] Critical path length ≒ " << cpLen << "\n";
-    cout << "[AUG] H_Cmax = " << H_Cmax
-         << ", H_Cost = " << H_Cost
-         << " (horizon = " << inst.horizon << ")\n";
+    cout << "[AUG] horizon = " << inst.horizon << "\n";
 
-    RNG_AUG rng;
-    vector<vector<double>> costs ;
-
-    // NSGA-II 側で costs.csv を出力
-    {
-        std::ifstream fin("costs.csv");
-        if (fin) {
-            int R, T;
-            if (fin >> R >> T && R == inst.nRes) {
-                costs.assign(R, std::vector<double>(T, 0.0));
-                for (int k = 0; k < R; ++k) {
-                    for (int t = 0; t < T; ++t) {
-                        if (!(fin >> costs[k][t])) {
-                            throw std::runtime_error(
-                                "[AUG] Failed to read costs.csv data");
-                        }
-                    }
-                }
-                std::cout << "[AUG] Reusing existing costs.csv (R="
-                          << R << ", T=" << T << ")\n";
-            } else {
-                std::cout << "[AUG] costs.csv header mismatch. "
-                             "Regenerating cost table.\n";
-                costs.clear();
-            }
-        }
+    vector<vector<double>> costs;
+    if (loadCostsCSV("costs.csv", inst.nRes, costs)) {
+        cout << "[AUG] Reusing existing costs.csv (R=" << inst.nRes
+             << ", T=" << (costs.empty() ? 0 : (int)costs[0].size()) << ")\n";
+    } else {
+        RNG_AUG rng;
+        costs = generateCosts_AUG(inst.nRes, inst.horizon, rng);
+        saveCostsCSV("costs.csv", costs);
+        cout << "[AUG] Generated new random costs and wrote costs.csv (R=" << inst.nRes
+             << ", T=" << inst.horizon << ")\n";
     }
 
-    // 読み込みに失敗した場合だけ新しく作る
-    if (costs.empty()) {
-        int R = inst.nRes;
-        int T = Hmax;
+    const double TIME_LIMIT_SEC = 900.0;
+    const double GAP_TARGET     = 0.2;
 
-        costs = generateCosts_AUG(R, T, rng);
-        std::cout << "[AUG] Generated new random costs (R="
-                  << R << ", T=" << T << ")\n";
+    int H_cost = inst.horizon;
 
-        // 一度だけ costs.csv を保存
-        std::ofstream fout("costs.csv");
-        if (!fout) {
-            throw std::runtime_error("[AUG] Cannot open costs.csv for writing");
-        }
-        fout << R << " " << T << "\n";
-        for (int k = 0; k < R; ++k) {
-            for (int t = 0; t < T; ++t) {
-                fout << costs[k][t];
-                if (t + 1 < T) fout << " ";
-            }
-            fout << "\n";
-        }
-        std::cout << "[AUG] costs.csv written (R=" << R
-                  << ", T=" << T << ")\n";
+    int minFeasibleH = 0;
+    for (int j = 0; j < inst.nJobs; ++j) {
+        minFeasibleH = max(minFeasibleH, inst.jobs[j].ES + inst.jobs[j].duration);
     }
+    int H_cmax = max(minFeasibleH, 250);  // tune as needed
+    H_cmax = min(H_cmax, inst.horizon);
 
-    try {
-        GRBEnv env = GRBEnv(true);
-        env.start();
+    cout << "[AUG] H_cmax = " << H_cmax << ", H_cost = " << H_cost << "\n";
 
-        double UB1, LB1, GAP1;
-        double UB2, LB2, GAP2;
-        int status1, solCount1;
-        int status2, solCount2;
+    GRBEnv env = GRBEnv(true);
+    env.start();
 
-#ifdef SMALL_INSTANCE_MODE
-        // j30, j60 用Cmax と Cost だけ求める
-        std::pair<double,double> res1 =
-            solveModel_AUG(inst, costs, env, H_Cmax,
-                           "Cmax", 1e9, "Cmax_opt",
-                           UB1, LB1, GAP1, status1, solCount1);
-        double Cmin       = res1.first;
-        double costAtCmin = res1.second;
+    double UB1, LB1, GAP1, UB2, LB2, GAP2;
+    int status1, solCnt1, status2, solCnt2;
 
-        std::pair<double,double> res2 =
-            solveModel_AUG(inst, costs, env, H_Cost,
-                           "Cost", 1e9, "Cost_opt",
-                           UB2, LB2, GAP2, status2, solCount2);
-        double cmaxAtCostMin = res2.first;
-        double CostMin       = res2.second;
+    std::pair<double,double> res1 =
+        solveModelSingleObj_AUG(inst, costs, env, H_cmax,
+                                    "Cmax", "Cmax_opt",
+                                    TIME_LIMIT_SEC, GAP_TARGET,
+                                    UB1, LB1, GAP1, status1, solCnt1);
+    double Cmin = res1.first;
+    double CostAtCmin = res1.second;
 
-        cout << "=== [AUG] Best makespan solution (Cmax objective) ===\n";
-        cout << "Cmax = " << Cmin
-             << ", Cost = " << costAtCmin << "\n";
-        cout << "  -> GAP (Cmax run) = " << GAP1 << "\n";
+    std::pair<double,double> res2 =
+        solveModelSingleObj_AUG(inst, costs, env, H_cost,
+                                "Cost", "Cost_opt",
+                                TIME_LIMIT_SEC, GAP_TARGET,
+                                UB2, LB2, GAP2, status2, solCnt2);
+    double CmaxAtCostMin = res2.first;
+    double CostMin = res2.second;
 
-        cout << "=== [AUG] Best cost solution (Cost objective) ===\n";
-        cout << "Cmax = " << cmaxAtCostMin
-             << ", Cost = " << CostMin << "\n";
-        cout << "  -> GAP (Cost run) = " << GAP2 << "\n";
 
-#else
-        // j90, j120 用の AUGMECON は必要になったらここに実装
-        cout << "[AUG] LARGE INSTANCE MODE is not implemented in this main.\n";
-#endif
 
-    } catch (GRBException &e) {
-        cerr << "[AUG] GRBException: " << e.getMessage() << endl;
-        throw;
-    }
+    // auto [Cmin, CostAtCmin] =
+    //     solveModelSingleObj_AUG(inst, costs, env, H_cmax,
+    //                             "Cmax", "Cmax_opt",
+    //                             TIME_LIMIT_SEC, GAP_TARGET,
+    //                             UB1, LB1, GAP1, status1, solCnt1);
+    //
+    // auto [CmaxAtCostMin, CostMin] =
+    //     solveModelSingleObj_AUG(inst, costs, env, H_cost,
+    //                             "Cost", "Cost_opt",
+    //                             TIME_LIMIT_SEC, GAP_TARGET,
+    //                             UB2, LB2, GAP2, status2, solCnt2);
+
+    cout << "=== [AUG] Best makespan solution (Cmax objective, time-limited) ===\n";
+    cout << "Cmax = " << Cmin << ", Cost = " << CostAtCmin << "\n";
+    cout << "  -> GAP (Cmax run) = " << GAP1 << "\n";
+
+    cout << "=== [AUG] Best cost solution (Cost objective, time-limited) ===\n";
+    cout << "Cmax = " << CmaxAtCostMin << ", Cost = " << CostMin << "\n";
+    cout << "  -> GAP (Cost run) = " << GAP2 << "\n";
 }
 
 
-// NSGA-II 用ユーティリティ
-
+// NSGA-II utilities
 
 
 bool loadStartTimesFromSol(const std::string &filename,
@@ -659,32 +633,27 @@ bool loadStartTimesFromSol(const std::string &filename,
                  << " from " << filename << endl;
             return false;
         }
-
         for (int k = 0; k < R; ++k) {
-            int tmp;
-            fin >> tmp;
+            int tmp; fin >> tmp;
         }
-
         if (id < 1 || id > N) {
             cerr << "[main] Invalid job id " << id
                  << " in " << filename << endl;
             return false;
         }
-        startTimes[id - 1] = st;  // 0-index
+        startTimes[id - 1] = st;
     }
-
     return true;
 }
 
-
 Solution *buildSolutionFromStartTimes(Problem *problem,
-                                      const std::vector<int> &startTimes, double initial_val) {
+                                      const std::vector<int> &startTimes,
+                                      double initial_val) {
     int nJobs = (int)startTimes.size();
 
     Solution *sol = new Solution(problem);
     Variable **vars = sol->getDecisionVariables();
     int nVars = sol->getNumberOfVariables();
-
 
     std::vector<int> jobs(nJobs);
     for (int j = 0; j < nJobs; ++j) jobs[j] = j;
@@ -696,55 +665,39 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
                   return a < b;
               });
 
-    // 先頭 nJobs に permutation
-    for (int i = 0; i < nJobs; ++i) {
-        vars[i]->setValue((double)jobs[i]);
-    }
+    for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)jobs[i]);
 
-    // 後半の schedObj ビットは一旦 0（これだめ）
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
-        if (idx < nVars) {
-            vars[idx]->setValue(initial_val);
-        }
+        if (idx < nVars) vars[idx]->setValue(initial_val);
     }
 
     return sol;
 }
 
 
-// 統合 main()
+// Integrated main
 
 
 int main(int argc, char **argv) {
 
-    // 同じインスタンスを AUGMECON と NSGA-II で使う
-    std::string instanceFile = "j30.sm/j3033_1.sm";
-    if (argc >= 2) {
-        instanceFile = argv[1];
-    }
+    std::string instanceFile = "j120.sm/j12011_10.sm";
+    if (argc >= 2) instanceFile = argv[1];
 
     cout << "============================================\n";
     cout << "[INFO] Integrated AUGMECON + NSGA-II start\n";
     cout << "       problem file   : " << instanceFile << endl;
     cout << "============================================\n\n";
 
-    // まず AUGMECON を実行して
-    //  costs.csv
-    //  schedule_Cmax_opt.sol
-    //  schedule_Cost_opt.sol
-    // を生成
     try {
         runAUGMECON(instanceFile);
     } catch (const std::exception &e) {
-        std::cerr << "[main] AUGMECON stage failed: "
-                  << e.what() << std::endl;
+        std::cerr << "[main] AUGMECON stage failed: " << e.what() << std::endl;
         return 1;
     }
 
     cout << "\n[INFO] AUGMECON stage finished. Now start NSGA-II.\n\n";
 
-    // NSGA-2 のセットアップ
     Problem *problem = new RCPSP_Problem(instanceFile);
     Algorithm *algorithm = new NSGAII(problem);
 
@@ -758,57 +711,51 @@ int main(int argc, char **argv) {
 
     int nJobs = problem->getNumberOfVariables() / 2;
 
-    // AUGMECON の 2 解を初期個体として注入
-    // SolutionSet *seedPopulation = new SolutionSet(2);
-    //
-    // // Cmax 最適解
-    // {
-    //     std::vector<int> stCmax;
-    //     if (loadStartTimesFromSol("schedule_Cmax_opt.sol",
-    //                               stCmax,
-    //                               nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cmax-opt solution NOT seeded "
-    //                      "(file not found or read error)." << std::endl;
-    //     }
-    // }
-    //
-    // // Cost 最適解
-    // {
-    //     std::vector<int> stCost;
-    //     if (loadStartTimesFromSol("schedule_Cost_opt.sol",
-    //                               stCost,
-    //                               nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cost-opt solution NOT seeded "
-    //                      "(file not found or read error)." << std::endl;
-    //     }
-    // }
-    //
-    // // SEED の f1, f2 を確認
-    // if (seedPopulation->size() > 0) {
-    //     std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
-    //     for (int i = 0; i < seedPopulation->size(); ++i) {
-    //         Solution* s = seedPopulation->get(i);
-    //         std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
-    //                   << " f2=" << s->getObjective(1) << std::endl;
-    //     }
-    //     std::cout << std::endl;
-    // } else {
-    //     std::cout << "[WARN] No seed solutions were added; "
-    //                  "NSGA-II will start from random population only.\n";
-    // }
-    //
-    // // NSGA-II に初期個体集合を渡す
-    // algorithm->setInputParameter("initialPopulation", seedPopulation);
+
+    // Optional seed 2 solutions from AUG schedules
+
+
+    SolutionSet *seedPopulation = new SolutionSet(2);
+
+    // Cmax-opt
+    {
+        std::vector<int> stCmax;
+        if (loadStartTimesFromSol("schedule_Cmax_opt.sol", stCmax, nJobs)) {
+            Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
+            problem->evaluate(s);
+            seedPopulation->add(s);
+            std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
+        } else {
+            std::cout << "[main] Cmax-opt solution NOT seeded (read error)." << std::endl;
+        }
+    }
+
+    // Cost-opt
+    {
+        std::vector<int> stCost;
+        if (loadStartTimesFromSol("schedule_Cost_opt.sol", stCost, nJobs)) {
+            Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
+            problem->evaluate(s);
+            seedPopulation->add(s);
+            std::cout << "[main] Seeded Cost-opt solution." << std::endl;
+        } else {
+            std::cout << "[main] Cost-opt solution NOT seeded (read error)." << std::endl;
+        }
+    }
+
+    if (seedPopulation->size() > 0) {
+        std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
+        for (int i = 0; i < seedPopulation->size(); ++i) {
+            Solution* s = seedPopulation->get(i);
+            std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
+                      << " f2=" << s->getObjective(1) << std::endl;
+        }
+        std::cout << std::endl;
+        algorithm->setInputParameter("initialPopulation", seedPopulation);
+    } else {
+        std::cout << "[WARN] No seed solutions were added; start from random population.\n";
+    }
+
 
     cout << "       populationSize : " << populationSize << endl;
     cout << "       maxEvaluations : " << maxEvaluations << endl;
@@ -828,10 +775,8 @@ int main(int argc, char **argv) {
     algorithm->addOperator("mutation", mutation);
     algorithm->addOperator("selection", selection);
 
-    // NSGA-II 実行
     SolutionSet *population = algorithm->execute();
 
-    // 非劣前線 0 を FUN / VAR に書き出し
     Ranking ranking(population);
     SolutionSet *front0 = ranking.getSubfront(0);
 
@@ -873,6 +818,7 @@ int main(int argc, char **argv) {
 
     return 0;
 }
+
 
 
 

@@ -747,7 +747,7 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
 }
 
 
-// ランダム・トポロジカル順の個体を1つ生成
+
 
 Solution* RCPSP_Problem::createRandomTopoSolution() {
     int nJobs = numberOfJobs_;
@@ -758,7 +758,7 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
 
 
 
-    // 入次数を数える
+
     std::vector<int> indeg(nJobs, 0);
     for (int j = 0; j < nJobs; ++j) {
         for (int succ : instance.successors[j]) {
@@ -768,7 +768,7 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
         }
     }
 
-    // 入次数0のノード集合
+
     std::vector<int> avail;
     avail.reserve(nJobs);
     for (int j = 0; j < nJobs; ++j) {
@@ -790,7 +790,7 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
         avail[idx] = avail.back();
         avail.pop_back();
 
-        // 出力順列に追加
+
         perm.push_back(j);
 
 
@@ -803,26 +803,25 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
         }
     }
 
-    // 何らかの理由でトポロジカルソートに失敗した場合
+
     if ((int)perm.size() != nJobs) {
         perm.resize(nJobs);
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    // 解の前半に permutation を書き込む
+
     for (int i = 0; i < nJobs; ++i) {
         vars[i]->setValue((double)perm[i]);
     }
 
-    //  後半の schedObj ビットを設定
-    // とりあえず全部 0 makespan優先 にしておく
+
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
         if (idx < nVars) {
             vars[idx]->setValue(0.0);
         }
     }
-    // 再確認
+
     if (nJobs > 0 && nJobs < nVars)   vars[nJobs + 0]->setValue(0.0);
     if (nJobs > 1 && nJobs + nJobs - 1 < nVars)
         vars[nJobs + nJobs - 1]->setValue(0.0);
