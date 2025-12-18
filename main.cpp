@@ -538,8 +538,8 @@ void runAUGMECON(const std::string &instanceFile) {
              << ", T=" << inst.horizon << ")\n";
     }
 
-    const double TIME_LIMIT_SEC = 900.0;
-    const double GAP_TARGET     = 0.2;
+    const double TIME_LIMIT_SEC = 300.0;
+    const double GAP_TARGET     = 0.01;
 
     int H_cost = inst.horizon;
 
@@ -681,7 +681,7 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
 
 int main(int argc, char **argv) {
 
-    std::string instanceFile = "j120.sm/j12011_10.sm";
+    std::string instanceFile = "j30.sm/j3033_1.sm";
     if (argc >= 2) instanceFile = argv[1];
 
     cout << "============================================\n";
@@ -702,7 +702,7 @@ int main(int argc, char **argv) {
     Algorithm *algorithm = new NSGAII(problem);
 
     int populationSize = 100;
-    int maxEvaluations = 2000;
+    int maxEvaluations = 200000;
 
     dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
 
@@ -715,46 +715,46 @@ int main(int argc, char **argv) {
     // Optional seed 2 solutions from AUG schedules
 
 
-    SolutionSet *seedPopulation = new SolutionSet(2);
-
-    // Cmax-opt
-    {
-        std::vector<int> stCmax;
-        if (loadStartTimesFromSol("schedule_Cmax_opt.sol", stCmax, nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-        } else {
-            std::cout << "[main] Cmax-opt solution NOT seeded (read error)." << std::endl;
-        }
-    }
-
-    // Cost-opt
-    {
-        std::vector<int> stCost;
-        if (loadStartTimesFromSol("schedule_Cost_opt.sol", stCost, nJobs)) {
-            Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
-            problem->evaluate(s);
-            seedPopulation->add(s);
-            std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-        } else {
-            std::cout << "[main] Cost-opt solution NOT seeded (read error)." << std::endl;
-        }
-    }
-
-    if (seedPopulation->size() > 0) {
-        std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
-        for (int i = 0; i < seedPopulation->size(); ++i) {
-            Solution* s = seedPopulation->get(i);
-            std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
-                      << " f2=" << s->getObjective(1) << std::endl;
-        }
-        std::cout << std::endl;
-        algorithm->setInputParameter("initialPopulation", seedPopulation);
-    } else {
-        std::cout << "[WARN] No seed solutions were added; start from random population.\n";
-    }
+    // SolutionSet *seedPopulation = new SolutionSet(2);
+    //
+    // // Cmax-opt
+    // {
+    //     std::vector<int> stCmax;
+    //     if (loadStartTimesFromSol("schedule_Cmax_opt.sol", stCmax, nJobs)) {
+    //         Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
+    //         problem->evaluate(s);
+    //         seedPopulation->add(s);
+    //         std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
+    //     } else {
+    //         std::cout << "[main] Cmax-opt solution NOT seeded (read error)." << std::endl;
+    //     }
+    // }
+    //
+    // // Cost-opt
+    // {
+    //     std::vector<int> stCost;
+    //     if (loadStartTimesFromSol("schedule_Cost_opt.sol", stCost, nJobs)) {
+    //         Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
+    //         problem->evaluate(s);
+    //         seedPopulation->add(s);
+    //         std::cout << "[main] Seeded Cost-opt solution." << std::endl;
+    //     } else {
+    //         std::cout << "[main] Cost-opt solution NOT seeded (read error)." << std::endl;
+    //     }
+    // }
+    //
+    // if (seedPopulation->size() > 0) {
+    //     std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
+    //     for (int i = 0; i < seedPopulation->size(); ++i) {
+    //         Solution* s = seedPopulation->get(i);
+    //         std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
+    //                   << " f2=" << s->getObjective(1) << std::endl;
+    //     }
+    //     std::cout << std::endl;
+    //     algorithm->setInputParameter("initialPopulation", seedPopulation);
+    // } else {
+    //     std::cout << "[WARN] No seed solutions were added; start from random population.\n";
+    // }
 
 
     cout << "       populationSize : " << populationSize << endl;

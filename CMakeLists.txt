@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /execution-charset:SHIFT_JIS /source-charset:UTF-8")
 
 
-set(GUROBI_DIR "C:/gurobi1300/win64")
+set(GUROBI_DIR "C:/gurobi1202/win64")
 
 
 include_directories("${GUROBI_DIR}/include")
@@ -52,14 +52,16 @@ target_include_directories(jmetalcpp PUBLIC
 )
 
 
-add_executable(TestJmetalCpp main.cpp)
+add_executable(TestJmetalCpp main.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
         jmetalcpp
 
 
-        gurobi130
+        gurobi120
         $<$<CONFIG:Debug>:gurobi_c++mdd2017>
         $<$<CONFIG:Release>:gurobi_c++md2017>
 )
