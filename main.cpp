@@ -20,6 +20,61 @@
 using namespace std;
 
 
+// =======================
+// Pareto coverage C-metric
+// C(A,B) = fraction of solutions in B that are dominated by at least one solution in A
+// (minimization assumed for all objectives)
+// We will report it as percentage: 100*C(A,B)
+// =======================
+struct Obj2 {
+    double f1;
+    double f2;
+};
+
+static inline bool dominatesMin2(const Obj2 &a, const Obj2 &b) {
+    // a dominates b if a is no worse in both and strictly better in at least one
+    return (a.f1 <= b.f1 && a.f2 <= b.f2) && (a.f1 < b.f1 || a.f2 < b.f2);
+}
+
+static inline std::vector<Obj2> readFun2(const std::string &path) {
+    std::ifstream fin(path);
+    std::vector<Obj2> pts;
+    if (!fin) return pts;
+
+    double x, y;
+    while (fin >> x >> y) {
+        pts.push_back({x, y});
+    }
+    return pts;
+}
+
+static inline double coveragePercent(const std::vector<Obj2> &A, const std::vector<Obj2> &B) {
+    if (B.empty()) return 0.0;
+    int dominatedCount = 0;
+    for (const auto &b : B) {
+        bool dominated = false;
+        for (const auto &a : A) {
+            if (dominatesMin2(a, b)) { dominated = true; break; }
+        }
+        if (dominated) dominatedCount++;
+    }
+    return 100.0 * (static_cast<double>(dominatedCount) / static_cast<double>(B.size()));
+}
+
+static inline void appendCMetricCSV(const std::string &csvPath,
+                                   const std::string &instancePrefix,
+                                   const std::string &sizeTag,
+                                   double c_noaug_over_aug) {
+    // CSV columns: instance,sizeTag,C(NO_AUG_NOLS over AUG_LS)[%]
+    const bool exists = std::ifstream(csvPath).good();
+    std::ofstream fout(csvPath, std::ios::app);
+    if (!exists) {
+        fout << "instance,sizeTag,C_NOAUG_NOLS_over_AUG_LS_percent\n";
+    }
+    fout << instancePrefix << "," << sizeTag << "," << c_noaug_over_aug << "\n";
+}
+
+
 struct ActivityAUG {
     int id = -1;
     int duration = 0;
@@ -514,7 +569,7 @@ pair<double,double> solveModelSingleObj_AUG(
 }
 
 
-void runAUGMECON(const std::string &instanceFile) {
+void runAUGMECON(const std::string &instanceFile, double timeLimitSec, double mipGap, const std::string &tagPrefix) {
     cout << "[AUG] Instance file = " << instanceFile << "\n";
 
     InstanceAUG inst = readPSPLIB_SM_AUG(instanceFile);
@@ -537,10 +592,7 @@ void runAUGMECON(const std::string &instanceFile) {
         cout << "[AUG] Generated new random costs and wrote costs.csv (R=" << inst.nRes
              << ", T=" << inst.horizon << ")\n";
     }
-
-    const double TIME_LIMIT_SEC = 300.0;
-    const double GAP_TARGET     = 0.01;
-
+    // timeLimitSec / mipGap are provided by caller (per instance)
     int H_cost = inst.horizon;
 
     int minFeasibleH = 0;
@@ -560,16 +612,16 @@ void runAUGMECON(const std::string &instanceFile) {
 
     std::pair<double,double> res1 =
         solveModelSingleObj_AUG(inst, costs, env, H_cmax,
-                                    "Cmax", "Cmax_opt",
-                                    TIME_LIMIT_SEC, GAP_TARGET,
+                                    "Cmax", (tagPrefix + "_Cmax_opt").c_str(),
+                                    timeLimitSec, mipGap,
                                     UB1, LB1, GAP1, status1, solCnt1);
     double Cmin = res1.first;
     double CostAtCmin = res1.second;
 
     std::pair<double,double> res2 =
         solveModelSingleObj_AUG(inst, costs, env, H_cost,
-                                "Cost", "Cost_opt",
-                                TIME_LIMIT_SEC, GAP_TARGET,
+                                    "Cost", (tagPrefix + "_Cost_opt"),
+                                timeLimitSec, mipGap,
                                 UB2, LB2, GAP2, status2, solCnt2);
     double CmaxAtCostMin = res2.first;
     double CostMin = res2.second;
@@ -578,14 +630,14 @@ void runAUGMECON(const std::string &instanceFile) {
 
     // auto [Cmin, CostAtCmin] =
     //     solveModelSingleObj_AUG(inst, costs, env, H_cmax,
-    //                             "Cmax", "Cmax_opt",
-    //                             TIME_LIMIT_SEC, GAP_TARGET,
+    //                             "Cmax", (tagPrefix + "_Cmax_opt").c_str(),
+    //                             timeLimitSec, mipGap,
     //                             UB1, LB1, GAP1, status1, solCnt1);
     //
     // auto [CmaxAtCostMin, CostMin] =
     //     solveModelSingleObj_AUG(inst, costs, env, H_cost,
-    //                             "Cost", "Cost_opt",
-    //                             TIME_LIMIT_SEC, GAP_TARGET,
+                                    "Cost", (tagPrefix + "_Cost_opt"),
+    //                             timeLimitSec, mipGap,
     //                             UB2, LB2, GAP2, status2, solCnt2);
 
     cout << "=== [AUG] Best makespan solution (Cmax objective, time-limited) ===\n";
@@ -679,145 +731,291 @@ Solution *buildSolutionFromStartTimes(Problem *problem,
 // Integrated main
 
 
+
 int main(int argc, char **argv) {
+    // If you pass an instance file as argv[1], we run ONLY that instance in "seed+LS" mode (backward-friendly).
+    // If no args, we run the full batch:
+    //   j3033_1 (base -> seed -> LS -> seed+LS) -> j601_1 -> j901_1 -> j1201_1
+    //
+    // Costs handling:
+    //   We maintain per-size files: costs_j30.csv, costs_j60.csv, costs_j90.csv, costs_j120.csv
+    //   Before each instance run, we copy the corresponding file to costs.csv
+    //   After finishing that size, we copy costs.csv back to the per-size file (so updates persist).
+    //
+    // AUGMECON params per size:
+    //   j30 : timelimit 300, MIPGap 0.1
+    //   j60 : timelimit 300, MIPGap 0.05
+    //   j90 : timelimit 600, MIPGap 0.1
+    //   j120: timelimit 600, MIPGap 0.3
 
-    std::string instanceFile = "j30.sm/j3033_1.sm";
-    if (argc >= 2) instanceFile = argv[1];
+    auto fileExists = [](const std::string &p) -> bool {
+        std::ifstream f(p);
+        return (bool)f;
+    };
 
-    cout << "============================================\n";
-    cout << "[INFO] Integrated AUGMECON + NSGA-II start\n";
-    cout << "       problem file   : " << instanceFile << endl;
-    cout << "============================================\n\n";
+    auto copyFile = [](const std::string &src, const std::string &dst) {
+        std::ifstream in(src, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open src: " + src);
+        std::ofstream out(dst, std::ios::binary);
+        if (!out) throw std::runtime_error("Cannot open dst: " + dst);
+        out << in.rdbuf();
+    };
+
+    auto baseNameNoExt = [](const std::string &path) -> std::string {
+        std::string s = path;
+        // strip dirs
+        size_t p = s.find_last_of("/\\");
+        if (p != std::string::npos) s = s.substr(p + 1);
+        // strip ext
+        size_t dot = s.find_last_of('.');
+        if (dot != std::string::npos) s = s.substr(0, dot);
+        return s;
+    };
+
+    auto detectSizeTag = [](const std::string &instancePath) -> std::string {
+        // Prefer folder name like "j30.sm/..."
+        if (instancePath.find("j30") != std::string::npos)  return "j30";
+        if (instancePath.find("j60") != std::string::npos)  return "j60";
+        if (instancePath.find("j90") != std::string::npos)  return "j90";
+        if (instancePath.find("j120") != std::string::npos) return "j120";
+        // fallback
+        return "unknown";
+    };
+
+    struct AugParams { double timelimit; double mipgap; };
+    auto augParamsFor = [](const std::string &sizeTag) -> AugParams {
+        if (sizeTag == "j30")  return {300.0, 0.10};
+        if (sizeTag == "j60")  return {300.0, 0.05};
+        if (sizeTag == "j90")  return {600.0, 0.10};
+        if (sizeTag == "j120") return {600.0, 0.30};
+        return {300.0, 0.10};
+    };
+
+    auto ensureCostsForSize = [&](const std::string &sizeTag) {
+        std::string perSize = "costs_" + sizeTag + ".csv";
+        if (fileExists(perSize)) {
+            copyFile(perSize, "costs.csv");
+            std::cout << "[BATCH] Using " << perSize << " -> costs.csv\n";
+        } else {
+            // If missing, leave costs.csv as-is; AUGMECON/RCPSP_Problem can generate it.
+            std::cout << "[BATCH] " << perSize << " not found. Will generate/keep costs.csv.\n";
+        }
+    };
+
+    auto persistCostsForSize = [&](const std::string &sizeTag) {
+        std::string perSize = "costs_" + sizeTag + ".csv";
+        if (fileExists("costs.csv")) {
+            copyFile("costs.csv", perSize);
+            std::cout << "[BATCH] Saved costs.csv -> " << perSize << "\n";
+        }
+    };
+
+    auto runNSGA = [&](const std::string &instanceFile,
+                       const std::string &tagPrefix,
+                       bool useAUGSeed,
+                       bool useLocalSearch) {
+
+        std::cout << "============================================\n";
+        std::cout << "[INFO] NSGA-II run\n";
+        std::cout << "  instance   : " << instanceFile << "\n";
+        std::cout << "  tagPrefix  : " << tagPrefix  << "\n";
+        std::cout << "  AUG seed   : " << (useAUGSeed ? "ON" : "OFF") << "\n";
+        std::cout << "  LocalSearch: " << (useLocalSearch ? "ON" : "OFF") << "\n";
+        std::cout << "============================================\n";
+
+        Problem *problem = new RCPSP_Problem(instanceFile);
+        Algorithm *algorithm = new NSGAII(problem);
+
+        int populationSize = 100;
+        int maxEvaluations = 2000;
+        dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
+
+        algorithm->setInputParameter("populationSize", &populationSize);
+        algorithm->setInputParameter("maxEvaluations", &maxEvaluations);
+
+        // Toggle local search inside NSGAII.cpp
+        int lsFlag = useLocalSearch ? 1 : 0;
+        algorithm->setInputParameter("useLocalSearch", &lsFlag);
+
+        int nJobs = problem->getNumberOfVariables() / 2;
+
+        // Seed 2 solutions from AUG schedules (optional)
+        SolutionSet *seedPopulation = nullptr;
+        if (useAUGSeed) {
+            seedPopulation = new SolutionSet(2);
+
+            // Cmax-opt
+            {
+                std::vector<int> stCmax;
+                std::string fn = "schedule_" + tagPrefix + "_Cmax_opt.sol";
+                if (loadStartTimesFromSol(fn, stCmax, nJobs)) {
+                    Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
+                    problem->evaluate(s);
+                    seedPopulation->add(s);
+                    std::cout << "[main] Seeded Cmax-opt solution from " << fn << "\n";
+                } else {
+                    std::cout << "[main] Cmax-opt solution NOT seeded (read error): " << fn << "\n";
+                }
+            }
+
+            // Cost-opt
+            {
+                std::vector<int> stCost;
+                std::string fn = "schedule_" + tagPrefix + "_Cost_opt.sol";
+                if (loadStartTimesFromSol(fn, stCost, nJobs)) {
+                    Solution *s = buildSolutionFromStartTimes(problem, stCost, 0);
+                    problem->evaluate(s);
+                    seedPopulation->add(s);
+                    std::cout << "[main] Seeded Cost-opt solution from " << fn << "\n";
+                } else {
+                    std::cout << "[main] Cost-opt solution NOT seeded (read error): " << fn << "\n";
+                }
+            }
+
+            if (seedPopulation->size() > 0) {
+                algorithm->setInputParameter("initialPopulation", seedPopulation);
+            } else {
+                delete seedPopulation;
+                seedPopulation = nullptr;
+            }
+        }
+
+        // Operators (same as your current main)
+        double crossoverProbability = 0.9;
+        Operator *crossover = new PermutationCrossover(crossoverProbability);
+
+        double mutationProbability =
+            1.0 / static_cast<double>(problem->getNumberOfVariables());
+        Operator *mutation = new PermutationMutation(mutationProbability, problem);
+
+        map<string, void *> selectionParameters;
+        Operator *selection = new BinaryTournament2(selectionParameters);
+
+        algorithm->addOperator("crossover", crossover);
+        algorithm->addOperator("mutation", mutation);
+        algorithm->addOperator("selection", selection);
+
+        // Execute
+        SolutionSet *population = algorithm->execute();
+
+        // Write outputs with mode-specific names
+        std::string mode =
+            std::string(useAUGSeed ? "AUG" : "NOAUG") + "_" +
+            std::string(useLocalSearch ? "LS" : "NOLS");
+
+        std::ofstream funFile("FUN_" + tagPrefix + "_" + mode);
+        std::ofstream varFile("VAR_" + tagPrefix + "_" + mode);
+
+        for (int i = 0; i < population->size(); ++i) {
+            Solution *sol = population->get(i);
+            funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
+
+            int nVar = problem->getNumberOfVariables();
+            Variable **vars = sol->getDecisionVariables();
+            for (int j = 0; j < nVar; ++j) {
+                varFile << vars[j]->getValue();
+                if (j + 1 < nVar) varFile << " ";
+            }
+            varFile << "\n";
+        }
+
+        funFile.close();
+        varFile.close();
+
+        // Cleanup
+        delete population;
+        delete algorithm;
+        delete problem;
+        if (seedPopulation) delete seedPopulation;
+
+        std::cout << "[INFO] NSGA-II done. Outputs: FUN_" << tagPrefix << "_" << mode
+                  << " / VAR_" << tagPrefix << "_" << mode << "\n\n";
+    };
+
+    auto runOneInstanceAllModes = [&](const std::string &instanceFile) {
+        const std::string sizeTag = detectSizeTag(instanceFile);
+        const std::string prefix  = baseNameNoExt(instanceFile);
+
+        ensureCostsForSize(sizeTag);
+
+        // 1) baseline: NO AUG seed, NO LS
+        runNSGA(instanceFile, prefix, false, false);
+
+        // 2) run AUGMECON once (needed for seed runs)
+        AugParams ap = augParamsFor(sizeTag);
+        std::cout << "[BATCH] Run AUGMECON for " << prefix
+                  << " (timelimit=" << ap.timelimit << ", mipgap=" << ap.mipgap << ")\n";
+        runAUGMECON(instanceFile, ap.timelimit, ap.mipgap, prefix);
+
+        // 3) seed only
+        runNSGA(instanceFile, prefix, true, false);
+
+        // 4) local search only
+        runNSGA(instanceFile, prefix, false, true);
+
+        // 5) seed + local search
+        runNSGA(instanceFile, prefix, true, true);
+
+
+        // C-metric
+
+        {
+            const std::string funA = "FUN_" + prefix + "_AUG_LS";
+            const std::string funB = "FUN_" + prefix + "_NOAUG_NOLS";
+            auto A = readFun2(funA);
+            auto B = readFun2(funB);
+
+            double cPercent = coveragePercent(A, B);
+            std::cout << "[C-METRIC] instance=" << prefix
+                      << " size=" << sizeTag
+                      << " C(AUG_LS, NOAUG_NOLS) = " << cPercent << " [%]"
+                      << " (A=" << A.size() << ", B=" << B.size() << ")\n";
+
+            appendCMetricCSV("Cmetric_summary.csv", prefix, sizeTag, cPercent);
+        }
+
+persistCostsForSize(sizeTag);
+    };
 
     try {
-        runAUGMECON(instanceFile);
+        if (argc >= 2) {
+            // Single instance (for quick test): default seed+LS (and run AUGMECON once)
+            std::string instanceFile = argv[1];
+            std::string sizeTag = detectSizeTag(instanceFile);
+            std::string prefix  = baseNameNoExt(instanceFile);
+
+            ensureCostsForSize(sizeTag);
+
+            AugParams ap = augParamsFor(sizeTag);
+            runAUGMECON(instanceFile, ap.timelimit, ap.mipgap, prefix);
+            runNSGA(instanceFile, prefix, true, true);
+
+            persistCostsForSize(sizeTag);
+            return 0;
+        }
+
+        // Full batch
+        std::vector<std::string> instances = {
+            "j30.sm/j3033_1.sm",
+            "j60.sm/j602_1.sm",
+
+        };
+
+        for (const auto &inst : instances) {
+            runOneInstanceAllModes(inst);
+        }
+
+        std::cout << "[BATCH] All done.\n";
+        return 0;
     } catch (const std::exception &e) {
-        std::cerr << "[main] AUGMECON stage failed: " << e.what() << std::endl;
+        std::cerr << "[ERROR] " << e.what() << std::endl;
         return 1;
     }
-
-    cout << "\n[INFO] AUGMECON stage finished. Now start NSGA-II.\n\n";
-
-    Problem *problem = new RCPSP_Problem(instanceFile);
-    Algorithm *algorithm = new NSGAII(problem);
-
-    int populationSize = 100;
-    int maxEvaluations = 200000;
-
-    dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
-
-    algorithm->setInputParameter("populationSize", &populationSize);
-    algorithm->setInputParameter("maxEvaluations", &maxEvaluations);
-
-    int nJobs = problem->getNumberOfVariables() / 2;
-
-
-    // Optional seed 2 solutions from AUG schedules
-
-
-    // SolutionSet *seedPopulation = new SolutionSet(2);
-    //
-    // // Cmax-opt
-    // {
-    //     std::vector<int> stCmax;
-    //     if (loadStartTimesFromSol("schedule_Cmax_opt.sol", stCmax, nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCmax, 0);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cmax-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cmax-opt solution NOT seeded (read error)." << std::endl;
-    //     }
-    // }
-    //
-    // // Cost-opt
-    // {
-    //     std::vector<int> stCost;
-    //     if (loadStartTimesFromSol("schedule_Cost_opt.sol", stCost, nJobs)) {
-    //         Solution *s = buildSolutionFromStartTimes(problem, stCost, 1);
-    //         problem->evaluate(s);
-    //         seedPopulation->add(s);
-    //         std::cout << "[main] Seeded Cost-opt solution." << std::endl;
-    //     } else {
-    //         std::cout << "[main] Cost-opt solution NOT seeded (read error)." << std::endl;
-    //     }
-    // }
-    //
-    // if (seedPopulation->size() > 0) {
-    //     std::cout << "\n[DEBUG] Seed solutions (from AUGMECON)\n";
-    //     for (int i = 0; i < seedPopulation->size(); ++i) {
-    //         Solution* s = seedPopulation->get(i);
-    //         std::cout << "  [SEED " << i << "] f1=" << s->getObjective(0)
-    //                   << " f2=" << s->getObjective(1) << std::endl;
-    //     }
-    //     std::cout << std::endl;
-    //     algorithm->setInputParameter("initialPopulation", seedPopulation);
-    // } else {
-    //     std::cout << "[WARN] No seed solutions were added; start from random population.\n";
-    // }
-
-
-    cout << "       populationSize : " << populationSize << endl;
-    cout << "       maxEvaluations : " << maxEvaluations << endl;
-
-    double crossoverProbability = 0.9;
-    Operator *crossover = new PermutationCrossover(crossoverProbability);
-
-    double mutationProbability =
-        1.0 / static_cast<double>(problem->getNumberOfVariables());
-    Operator *mutation = new PermutationMutation(mutationProbability, problem);
-
-    map<string, void *> selectionParameters;
-    selectionParameters["comparator"] = new CrowdingDistanceComparator();
-    Operator *selection = new BinaryTournament2(selectionParameters);
-
-    algorithm->addOperator("crossover", crossover);
-    algorithm->addOperator("mutation", mutation);
-    algorithm->addOperator("selection", selection);
-
-    SolutionSet *population = algorithm->execute();
-
-    Ranking ranking(population);
-    SolutionSet *front0 = ranking.getSubfront(0);
-
-    std::ofstream funFile("FUN");
-    std::ofstream varFile("VAR");
-
-    int nVar = problem->getNumberOfVariables();
-
-    for (int i = 0; i < front0->size(); ++i) {
-        Solution *sol = front0->get(i);
-
-        funFile << sol->getObjective(0) << " "
-                << sol->getObjective(1) << "\n";
-
-        Variable **vars = sol->getDecisionVariables();
-        for (int j = 0; j < nVar; ++j) {
-            varFile << vars[j]->getValue();
-            if (j + 1 < nVar) varFile << " ";
-        }
-        varFile << "\n";
-    }
-
-    funFile.close();
-    varFile.close();
-
-    int evaluations = 0;
-    void *evalPtr = algorithm->getOutputParameter("evaluations");
-    if (evalPtr != nullptr) {
-        evaluations = *static_cast<int *>(evalPtr);
-    }
-
-    cout << "\n[INFO] NSGA-II finished successfully" << endl;
-    cout << "       Total evaluations : " << evaluations << endl;
-    cout << "[INFO] Results written to FUN / VAR files" << endl;
-
-    delete population;
-    delete algorithm;
-    delete problem;
-
-    return 0;
 }
+
+
+
+
 
 
 

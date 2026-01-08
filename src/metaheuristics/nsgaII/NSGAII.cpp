@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-// ★ RCPSP_Problem を使うため追加
+
 #include "problems/RCPSP_Problem.h"
 
 NSGAII::NSGAII(Problem *problem)
@@ -20,7 +20,6 @@ NSGAII::~NSGAII() {
 }
 
 SolutionSet *NSGAII::execute() {
-
     populationSize    = *(int *)getInputParameter("populationSize");
     maxEvaluations    = *(int *)getInputParameter("maxEvaluations");
     crossoverOperator = getOperator("crossover");
@@ -41,6 +40,17 @@ SolutionSet *NSGAII::execute() {
 
     population = new SolutionSet(populationSize);
     int filled = 0;
+
+    // Optional: toggle local search by input parameter "useLocalSearch" (int: 0/1).
+    bool useLocalSearch = true;
+    {
+        void *pLS = getInputParameter("useLocalSearch");
+        if (pLS != nullptr) {
+            int v = *static_cast<int *>(pLS);
+            useLocalSearch = (v != 0);
+        }
+    }
+
 
     if (seedPopulation != nullptr) {
         int seedSize = seedPopulation->size();
@@ -100,13 +110,15 @@ SolutionSet *NSGAII::execute() {
             problem_->evaluate(c2);
 
             // ここで RCPSP 用の局所探索を追加
-            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-                // -1 or 0 なら「改善できなくなるまで」
-                // rcpsp->localSearchOnActivityOrder(c1, -1);
-                // rcpsp->localSearchOnActivityOrder(c2, -1);
-                //
-                // rcpsp->localSearchOnSchedObj(c1, -1);
-                // rcpsp->localSearchOnSchedObj(c2, -1);
+            if (useLocalSearch) {
+                if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+                    // -1 or 0 なら「改善できなくなるまで」
+                    rcpsp->localSearchOnActivityOrder(c1, -1);
+                    rcpsp->localSearchOnActivityOrder(c2, -1);
+
+                    rcpsp->localSearchOnSchedObj(c1, -1);
+                    rcpsp->localSearchOnSchedObj(c2, -1);
+                }
             }
 
 
@@ -158,7 +170,6 @@ SolutionSet *NSGAII::execute() {
     setOutputParameter("evaluations", &evaluations);
     return population;
 }
-
 
 
 
