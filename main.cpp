@@ -786,8 +786,8 @@ int main(int argc, char **argv) {
     struct AugParams { double timelimit; double mipgap; };
     auto augParamsFor = [](const std::string &sizeTag) -> AugParams {
         if (sizeTag == "j30")  return {300.0, 0.01};
-        if (sizeTag == "j60")  return {300.0, 0.05};
-        if (sizeTag == "j90")  return {600.0, 0.10};
+        if (sizeTag == "j60")  return {300.0, 0.1};
+        if (sizeTag == "j90")  return {600.0, 0.15};
         if (sizeTag == "j120") return {600.0, 0.30};
         return {300.0, 0.10};
     };
