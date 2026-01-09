@@ -2,7 +2,8 @@
 
 #include "gurobi_c++.h"
 #include <queue>
-
+#include <filesystem>
+#include <cstdio>
 #include "core/Problem.h"
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
@@ -784,12 +785,15 @@ int main(int argc, char **argv) {
 
     struct AugParams { double timelimit; double mipgap; };
     auto augParamsFor = [](const std::string &sizeTag) -> AugParams {
-        if (sizeTag == "j30")  return {300.0, 0.10};
+        if (sizeTag == "j30")  return {300.0, 0.01};
         if (sizeTag == "j60")  return {300.0, 0.05};
         if (sizeTag == "j90")  return {600.0, 0.10};
         if (sizeTag == "j120") return {600.0, 0.30};
         return {300.0, 0.10};
     };
+
+    std::string prevSizeTag = ""; // track size changes to regenerate costs
+
 
     auto ensureCostsForSize = [&](const std::string &sizeTag) {
         std::string perSize = "costs_" + sizeTag + ".csv";
@@ -827,7 +831,7 @@ int main(int argc, char **argv) {
         Algorithm *algorithm = new NSGAII(problem);
 
         int populationSize = 100;
-        int maxEvaluations = 2000;
+        int maxEvaluations = 200000;
         dynamic_cast<RCPSP_Problem*>(problem)->setMaxEvaluations(maxEvaluations);
 
         algorithm->setInputParameter("populationSize", &populationSize);
@@ -936,7 +940,31 @@ int main(int argc, char **argv) {
         const std::string sizeTag = detectSizeTag(instanceFile);
         const std::string prefix  = baseNameNoExt(instanceFile);
 
-        ensureCostsForSize(sizeTag);
+// If instance size changed (j30->j60->...), regenerate a fresh costs.csv
+if (sizeTag != prevSizeTag) {
+    std::cout << "[BATCH] Size changed: " << prevSizeTag << " -> " << sizeTag
+              << "  => regenerate costs.csv\n";
+    // Remove any old costs.csv so AUG/RCPSP will generate a new one for this size
+    auto fileExists = [](const std::string& path) -> bool {
+        std::ifstream f(path.c_str());
+        return f.good();
+    };
+
+    if (fileExists("costs.csv")) {
+        std::remove("costs.csv");  // const char* が必要
+    }
+
+    std::string perSize = "costs_" + sizeTag + ".csv";
+    if (fileExists(perSize)) {
+        std::remove(perSize.c_str());
+    }
+    // Reset RCPSP global cost series cache so it won't reuse the previous instance's table
+    RCPSP_Problem::resetGlobalCostSeries();
+
+    prevSizeTag = sizeTag;
+}
+
+ensureCostsForSize(sizeTag);
 
         // 1) baseline: NO AUG seed, NO LS
         runNSGA(instanceFile, prefix, false, false);
@@ -996,9 +1024,113 @@ persistCostsForSize(sizeTag);
 
         // Full batch
         std::vector<std::string> instances = {
-            "j30.sm/j3033_1.sm",
-            "j60.sm/j602_1.sm",
-
+            "j30.sm/j301_1.sm",
+            // "j30.sm/j302_1.sm",
+            // "j30.sm/j303_1.sm",
+            // "j30.sm/j304_1.sm",
+            // "j30.sm/j305_1.sm",
+            // "j30.sm/j306_1.sm",
+            // "j30.sm/j307_1.sm",
+            // "j30.sm/j308_1.sm",
+            // "j30.sm/j309_1.sm",
+            // "j30.sm/j3010_1.sm",
+            // "j30.sm/j3011_1.sm",
+            // "j30.sm/j3012_1.sm",
+            // "j30.sm/j3013_1.sm",
+            // "j30.sm/j3014_1.sm",
+            // "j30.sm/j3015_1.sm",
+            // "j30.sm/j3016_1.sm",
+            // "j30.sm/j3017_1.sm",
+            // "j30.sm/j3018_1.sm",
+            // "j30.sm/j3019_1.sm",
+            // "j30.sm/j3020_1.sm",
+            // "j30.sm/j3021_1.sm",
+            // "j30.sm/j3022_1.sm",
+            // "j30.sm/j3023_1.sm",
+            // "j30.sm/j3024_1.sm",
+            // "j30.sm/j3025_1.sm",
+            // "j30.sm/j3026_1.sm",
+            // "j30.sm/j3027_1.sm",
+            // "j30.sm/j3028_1.sm",
+            // "j30.sm/j3029_1.sm",
+            // "j30.sm/j3030_1.sm",
+            // "j30.sm/j3031_1.sm",
+            // "j30.sm/j3032_1.sm",
+            // "j30.sm/j3033_1.sm",
+            // "j30.sm/j3034_1.sm",
+            // "j30.sm/j3035_1.sm",
+            // "j30.sm/j3036_1.sm",
+            // "j30.sm/j3037_1.sm",
+            // "j30.sm/j3038_1.sm",
+            // "j30.sm/j3039_1.sm",
+            // "j30.sm/j3040_1.sm",
+            // "j30.sm/j3041_1.sm",
+            // "j30.sm/j3042_1.sm",
+            // "j30.sm/j3043_1.sm",
+            // "j30.sm/j3044_1.sm",
+            // "j30.sm/j3045_1.sm",
+            // "j30.sm/j3046_1.sm",
+            // "j30.sm/j3047_1.sm",
+            // "j30.sm/j3048_1.sm",
+            // "j60.sm/j602_1.sm",
+            // "j60.sm/j603_1.sm",
+            // "j60.sm/j604_1.sm",
+            // "j60.sm/j605_1.sm",
+            // "j60.sm/j606_1.sm",
+            // "j60.sm/j607_1.sm",
+            // "j60.sm/j608_1.sm",
+            // "j60.sm/j609_1.sm",
+            // "j60.sm/j6010_1.sm",
+            // "j60.sm/j6011_1.sm",
+            // "j60.sm/j6012_1.sm",
+            // "j60.sm/j6013_1.sm",
+            // "j60.sm/j6014_1.sm",
+            // "j60.sm/j6015_1.sm",
+            // "j60.sm/j6016_1.sm",
+            // "j60.sm/j6017_1.sm",
+            // "j60.sm/j6018_1.sm",
+            // "j60.sm/j6019_1.sm",
+            // "j60.sm/j6020_1.sm",
+            // "j60.sm/j6021_1.sm",
+            // "j60.sm/j6022_1.sm",
+            // "j60.sm/j6023_1.sm",
+            // "j60.sm/j6024_1.sm",
+            // "j60.sm/j6025_1.sm",
+            // "j60.sm/j6026_1.sm",
+            // "j60.sm/j6027_1.sm",
+            // "j60.sm/j6028_1.sm",
+            // "j60.sm/j6029_1.sm",
+            // "j60.sm/j6030_1.sm",
+            // "j60.sm/j6031_1.sm",
+            // "j60.sm/j6032_1.sm",
+            // "j60.sm/j6033_1.sm",
+            // "j60.sm/j6034_1.sm",
+            // "j60.sm/j6035_1.sm",
+            // "j60.sm/j6036_1.sm",
+            // "j60.sm/j6037_1.sm",
+            // "j60.sm/j6038_1.sm",
+            // "j60.sm/j6039_1.sm",
+            // "j60.sm/j6040_1.sm",
+            // "j60.sm/j6041_1.sm",
+            // "j60.sm/j6042_1.sm",
+            // "j60.sm/j6043_1.sm",
+            // "j60.sm/j6044_1.sm",
+            // "j60.sm/j6045_1.sm",
+            // "j60.sm/j6046_1.sm",
+            // "j60.sm/j6047_1.sm",
+            // "j60.sm/j6048_1.sm",
+            // "j90.sm/j901_1.sm",
+            // "j90.sm/j9010_1.sm",
+            // "j90.sm/j9020_1.sm",
+            // "j90.sm/j9030_1.sm",
+            // "j90.sm/j9040_1.sm",
+            // "j120.sm/j1201_1.sm",
+            // "j120.sm/j12010_1.sm",
+            // "j120.sm/j12020_1.sm",
+            // "j120.sm/j12030_1.sm",
+            // "j120.sm/j12040_1.sm",
+            // "j120.sm/j12050_1.sm",
+            // "j120.sm/j12060_1.sm",
         };
 
         for (const auto &inst : instances) {
