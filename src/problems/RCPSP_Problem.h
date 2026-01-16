@@ -29,6 +29,14 @@ public:
 
     void setMaxEvaluations(int maxEval) { maxEvaluations_ = maxEval; }
 
+// === Cost series control (global, shared across instances) ===
+// If you want to regenerate costs when instance size changes, call this before running the next instance.
+static void resetGlobalCostSeries();
+
+// Optional: force writing current cost table to CSV (mainly for debugging / reproducibility)
+static bool writeGlobalCostSeriesCSV(const std::string &filename);
+
+
     // ランダムに実行可能なジョブ順序（topological) を生成する
     std::vector<int> random_topological_sort(const int seed) const {
         int n = (int)instance.successors.size();

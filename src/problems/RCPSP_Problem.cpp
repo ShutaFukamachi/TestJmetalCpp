@@ -113,6 +113,40 @@ static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
     return true;
 }
 
+static bool writeCostTableToCSV(const std::string &filename) {
+    if (!COST_INITIALIZED || COST_R <= 0 || COST_T <= 0 || (int)COST_TABLE.size() != COST_R) {
+        std::cerr << "[RCPSP_Problem] Cannot write cost table: not initialized.\n";
+        return false;
+    }
+    std::ofstream fout(filename);
+    if (!fout) {
+        std::cerr << "[RCPSP_Problem] Failed to open " << filename << " for writing.\n";
+        return false;
+    }
+    fout << COST_R << " " << COST_T << "\n";
+    for (int k = 0; k < COST_R; ++k) {
+        for (int t = 0; t < COST_T; ++t) {
+            fout << COST_TABLE[k][t];
+            if (t + 1 < COST_T) fout << " ";
+        }
+        fout << "\n";
+    }
+    std::cout << "[RCPSP_Problem] Wrote cost table to " << filename
+              << " (R=" << COST_R << ", T=" << COST_T << ")\n";
+    return true;
+}
+
+// Reset the global cost series so the next instance will (re)load or (re)generate costs.
+static void resetCostSeriesInternal() {
+    COST_INITIALIZED = false;
+    COST_T = -1;
+    COST_R = 4;
+    COST_TABLE.clear();
+    std::cout << "[RCPSP_Problem] Reset global cost series.\n";
+}
+
+
+
 // horizon T に対して全資源のコスト系列を生成
 //  costs.csv があればそれを使う
 //   なければ論文パターンに従ってランダム生成
@@ -173,7 +207,10 @@ static void generateCostSeries(int R, int T) {
     COST_T           = T;
     COST_INITIALIZED = true;
 
-    std::cout << "[RCPSP_Problem] Generated random cost series (R="
+        // Save for reproducibility / for subsequent runs of the same size
+    writeCostTableToCSV("costs.csv");
+
+std::cout << "[RCPSP_Problem] Generated random cost series (R="
               << R << ", T=" << T << ")\n";
 }
 
@@ -828,6 +865,22 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
 
     return sol;
 }
+
+
+
+
+
+
+
+// ===== RCPSP_Problem: global cost series control =====
+void RCPSP_Problem::resetGlobalCostSeries() {
+    resetCostSeriesInternal();
+}
+
+bool RCPSP_Problem::writeGlobalCostSeriesCSV(const std::string &filename) {
+    return writeCostTableToCSV(filename);
+}
+
 
 
 
