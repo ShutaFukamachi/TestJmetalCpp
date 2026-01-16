@@ -413,11 +413,11 @@ int main(int argc, char **argv) {
 
         // Full batch（必要なものだけ残してOK）
         vector<string> instances = {
-            "j120.sm/j1201_1.sm",
+            // "j120.sm/j1201_1.sm",
              "j120.sm/j12016_1.sm",
-             "j120.sm/j12046_1.sm",
-             "j120.sm/j12057_1.sm",
-             "j120.sm/j12060_1.sm"
+             // "j120.sm/j12046_1.sm",
+             // "j120.sm/j12057_1.sm",
+             // "j120.sm/j12060_1.sm"
         };
 
         for (const auto &inst : instances) {
