@@ -84,7 +84,10 @@ SolutionSet *NSGAII::execute() {
     // メインループ
 
     while (evaluations < maxEvaluations) {
-        std::cout << "evaluations = " << evaluations << std::endl;
+        static const int LOG_EVERY_EVAL = 20000;
+        if (evaluations % LOG_EVERY_EVAL == 0) {
+            std::cout << "evaluations = " << evaluations << std::endl;
+        }
 
         offspringPopulation = new SolutionSet(populationSize);
 
@@ -170,6 +173,9 @@ SolutionSet *NSGAII::execute() {
     setOutputParameter("evaluations", &evaluations);
     return population;
 }
+
+
+
 
 
 
