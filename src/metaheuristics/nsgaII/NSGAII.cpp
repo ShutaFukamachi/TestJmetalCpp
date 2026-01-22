@@ -168,7 +168,7 @@ SolutionSet *NSGAII::execute() {
         }
 
         population = nextGen;
-        // offspringPopulation / unionPopulation のポインタは上書きしているだけ
+
     }
     setOutputParameter("evaluations", &evaluations);
     return population;

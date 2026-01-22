@@ -10,8 +10,6 @@
 #include <random>
 #include <stdexcept>
 #include <iostream>
-
-#include "gurobi_c++.h"
 #include "core/Problem.h"
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
