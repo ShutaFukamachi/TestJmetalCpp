@@ -433,7 +433,6 @@ int main(int argc, char **argv) {
              "j30.sm/j3031_1.sm",
              "j30.sm/j3032_1.sm",
              "j30.sm/j3033_1.sm",
-
              "j30.sm/j3034_1.sm",
              "j30.sm/j3035_1.sm",
              "j30.sm/j3036_1.sm",
