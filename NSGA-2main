@@ -527,21 +527,54 @@ int main(int argc, char **argv) {
         }
 
         vector<string> instances = {
-             // "j30.sm/j3037_1.sm",
-             // "j30.sm/j3038_1.sm",
-             // "j30.sm/j3039_1.sm",
-             // "j30.sm/j3040_1.sm",
-             // "j30.sm/j3041_1.sm",
-             // "j30.sm/j3042_1.sm",
-             // "j30.sm/j3043_1.sm",
-             // "j30.sm/j3044_1.sm",
-             // "j30.sm/j3045_1.sm",
-            //  "j30.sm/j3046_1.sm",
-            "j60.sm/j6034_1.sm",
-            "j90.sm/j909_1.sm",
-            "j120.sm/j12049_1.sm",
+            "j30.sm/j301_1.sm",
+             "j30.sm/j302_1.sm",
+             "j30.sm/j303_1.sm",
+             "j30.sm/j304_1.sm",
+             "j30.sm/j305_1.sm",
+             "j30.sm/j306_1.sm",
+             "j30.sm/j307_1.sm",
+             "j30.sm/j308_1.sm",
+             "j30.sm/j309_1.sm",
+             "j30.sm/j3010_1.sm",
+             "j30.sm/j3011_1.sm",
+             "j30.sm/j3012_1.sm",
+             "j30.sm/j3013_1.sm",
+             "j30.sm/j3014_1.sm",
+             "j30.sm/j3015_1.sm",
+             "j30.sm/j3016_1.sm",
+             "j30.sm/j3017_1.sm",
+             "j30.sm/j3018_1.sm",
+             "j30.sm/j3019_1.sm",
+             "j30.sm/j3020_1.sm",
+             "j30.sm/j3021_1.sm",
+             "j30.sm/j3022_1.sm",
+             "j30.sm/j3023_1.sm",
+             "j30.sm/j3024_1.sm",
+             "j30.sm/j3025_1.sm",
+             "j30.sm/j3026_1.sm",
+             "j30.sm/j3027_1.sm",
+             "j30.sm/j3028_1.sm",
+             "j30.sm/j3029_1.sm",
+             "j30.sm/j3030_1.sm",
+             "j30.sm/j3031_1.sm",
+             "j30.sm/j3032_1.sm",
+             "j30.sm/j3033_1.sm",
+             "j30.sm/j3034_1.sm",
+             "j30.sm/j3035_1.sm",
+             "j30.sm/j3036_1.sm",
+             "j30.sm/j3037_1.sm",
+             "j30.sm/j3038_1.sm",
+             "j30.sm/j3039_1.sm",
+             "j30.sm/j3040_1.sm",
+             "j30.sm/j3041_1.sm",
+             "j30.sm/j3042_1.sm",
+             "j30.sm/j3043_1.sm",
+             "j30.sm/j3044_1.sm",
+             "j30.sm/j3045_1.sm",
+             "j30.sm/j3046_1.sm",
              "j30.sm/j3047_1.sm",
-              "j30.sm/j3048_1.sm",
+             "j30.sm/j3048_1.sm",
              "j60.sm/j601_1.sm",
              "j60.sm/j602_1.sm",
              "j60.sm/j603_1.sm",
@@ -698,7 +731,6 @@ int main(int argc, char **argv) {
              "j120.sm/j12058_1.sm",
              "j120.sm/j12059_1.sm",
              "j120.sm/j12060_1.sm"
-
         };
 
         for (const auto &inst : instances) runOneInstanceAllModes(inst);
@@ -711,16 +743,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-
-
-
-
-
-
-
-
-
-
 
 
 

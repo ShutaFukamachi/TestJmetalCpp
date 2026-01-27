@@ -186,9 +186,3 @@ SolutionSet *NSGAII::execute() {
     return population;
 }
 
-
-
-
-
-
-

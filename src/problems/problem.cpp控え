@@ -881,4 +881,3 @@ bool RCPSP_Problem::writeGlobalCostSeriesCSV(const std::string &filename) {
     return writeCostTableToCSV(filename);
 }
 
-

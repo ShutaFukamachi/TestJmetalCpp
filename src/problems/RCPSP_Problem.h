@@ -16,6 +16,9 @@ public:
     // ランダム・トポロジカル順の Solution
     Solution* createRandomTopoSolution();
 
+
+    const std::vector<std::vector<int>>& getSuccessors() const { return instance.successors; }
+
     void localSearchOnSchedObj(Solution *solution, int maxLSMoves);
 
     void localSearchOnActivityOrder(Solution *solution, int maxLSMoves);

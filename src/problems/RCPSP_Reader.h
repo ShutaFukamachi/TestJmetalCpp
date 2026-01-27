@@ -5,6 +5,8 @@
 struct RCPSP_Instance {
     int nJobs = 0;
     int nRes  = 0;
+
+
     std::vector<int> capacity;                    // size nRes
     std::vector<int> duration;                    // size nJobs (1-based in file -> store 0-based index)
     std::vector<std::vector<int>> demand;         // [job][res]

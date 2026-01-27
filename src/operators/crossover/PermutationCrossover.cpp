@@ -94,8 +94,8 @@ void * PermutationCrossover::execute(void * object) {
         b[i] = v2[i]->getValue();
     }
 
-//    repairToPermutation(a, nJobs);
-//    repairToPermutation(b, nJobs);
+    repairToPermutation(a, nJobs);
+    repairToPermutation(b, nJobs);
 
     std::uniform_int_distribution<> dis(1, nJobs - 2);
     int c1 = dis(gen), c2 = dis(gen);

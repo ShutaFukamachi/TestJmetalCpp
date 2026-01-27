@@ -1,0 +1,64 @@
+#ifndef RCPSP_PROBLEM_H
+#define RCPSP_PROBLEM_H
+
+#include "Problem.h"
+#include "IntSolutionType.h"
+#include "RCPSP_Reader.h"
+
+#include <vector>
+#include <string>
+#include <random>
+
+class Solution;
+
+class RCPSP_Problem : public Problem {
+public:
+    // コンストラクタ
+    explicit RCPSP_Problem(const std::string &filename, int strategy = 1);
+    ~RCPSP_Problem() override = default;
+
+    // 評価関数
+    void evaluate(Solution *solution) override;
+
+    // 情報表示
+    void printInfo() const;
+
+    // ランダムなトポロジカル解
+    Solution* createRandomTopoSolution();
+
+    // 局所探索
+    void localSearchOnSchedObj(Solution *solution, int maxLSMoves);
+    void localSearchOnActivityOrder(Solution *solution, int maxLSMoves);
+
+    // NSGA-II 用
+    void setMaxEvaluations(int maxEval) { maxEvaluations_ = maxEval; }
+
+    // precedence 取得（解析・デバッグ用）
+    const std::vector<std::vector<int>>& getSuccessors() const {
+        return instance.successors;
+    }
+
+    // === コスト系列制御 ===
+    static void resetGlobalCostSeries();
+    static bool writeGlobalCostSeriesCSV(const std::string &filename);
+
+private:
+    // トポロジカルチェック
+    bool checkTopological(const std::vector<int> &seq) const;
+    bool checkTopological(Solution *solution) const;
+
+private:
+    int numberOfJobs_{0};
+
+    // PSPLIB instance
+    const RCPSP_Instance instance;
+
+    // 戦略（maxShift 用）
+    int strategy_{1};
+
+    // NSGA-II から渡される
+    int maxEvaluations_{0};
+    int evalCounter_{0};
+};
+
+#endif
