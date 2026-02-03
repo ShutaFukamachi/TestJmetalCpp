@@ -501,7 +501,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
                 --t_mak;
             }
             if (t_mak < 0) {
-                std::cerr << "[ERROR] Cannot place job " << j << " in schedule!" << std::endl;
+                // std::cerr << "[ERROR] Cannot place job " << j << " in schedule!" << std::endl;
                 solution->setObjective(0, 1e9);
                 solution->setObjective(1, 1e9);
                 return;
