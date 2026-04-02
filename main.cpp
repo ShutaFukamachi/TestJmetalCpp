@@ -1,3 +1,14 @@
+// ============================================================
+//  main_split_comparison.cpp
+//
+//  3モード比較実験: P1 (分割なし) / P2 (非先制的分割) / P3 (自由分割)
+//  + 時間依存資源制約 (Resource Range rr, Resource Vacation rv)
+//  + 再開ペナルティ restartPenalty
+//
+//  出力: FUN_<instanceId>_P{1,2,3}_<mode>.txt  (makespan, cost)
+//        results_summary.csv  (インスタンス × モード × 指標)
+// ============================================================
+
 #include <limits>
 #include <queue>
 #include <cstdio>
@@ -12,7 +23,6 @@
 #include <iostream>
 #include <cmath>
 
-#include "gurobi_c++.h"
 #include "core/Problem.h"
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
@@ -28,11 +38,8 @@
 using namespace std;
 
 // ============================================================
-// Pareto coverage C-metric
-// C(A,B) = fraction of solutions in B dominated by at least one in A (minimization)
-// report 100*C(A,B)
+//  ユーティリティ
 // ============================================================
-
 struct Obj2 { double f1; double f2; };
 
 static inline bool dominatesMin2(const Obj2 &a, const Obj2 &b) {
@@ -48,41 +55,21 @@ static inline vector<Obj2> readFun2(const string &path) {
     return pts;
 }
 
+// C-metric: A が B の何割を支配しているか [0,100]
 static inline double coveragePercent(const vector<Obj2> &A, const vector<Obj2> &B) {
     if (B.empty()) return 0.0;
-    int dominatedCount = 0;
+    int dominated = 0;
     for (const auto &b : B) {
-        bool dominated = false;
         for (const auto &a : A) {
-            if (dominatesMin2(a, b)) { dominated = true; break; }
+            if (dominatesMin2(a, b)) { ++dominated; break; }
         }
-        if (dominated) dominatedCount++;
     }
-    return 100.0 * (double)dominatedCount / (double)B.size();
+    return 100.0 * dominated / (double)B.size();
 }
-
-static inline void appendCMetricCSV(const string &csvPath,
-                                    const string &instanceFile,
-                                    const string &instanceId,
-                                    const string &sizeTag,
-                                    double cPercent) {
-    const bool exists = ifstream(csvPath.c_str()).good();
-    ofstream fout(csvPath.c_str(), ios::app);
-    if (!exists) {
-        fout << "instanceFile,instanceId,sizeTag,C_AUG_LS_over_NOAUG_NOLS_percent\n";
-    }
-    fout << instanceFile << "," << instanceId << "," << sizeTag << "," << cPercent << "\n";
-}
-
-// ============================================================
-// Utility: file ops
-// ============================================================
 
 static inline bool fileExists(const string &p) {
-    ifstream f(p.c_str(), ios::binary);
-    return (bool)f;
+    ifstream f(p.c_str(), ios::binary); return (bool)f;
 }
-
 static inline void copyFileBinary(const string &src, const string &dst) {
     ifstream in(src.c_str(), ios::binary);
     if (!in) throw runtime_error("Cannot open src: " + src);
@@ -90,7 +77,6 @@ static inline void copyFileBinary(const string &src, const string &dst) {
     if (!out) throw runtime_error("Cannot open dst: " + dst);
     out << in.rdbuf();
 }
-
 static inline string baseNameNoExt(const string &path) {
     string s = path;
     size_t p = s.find_last_of("/\\");
@@ -99,652 +85,309 @@ static inline string baseNameNoExt(const string &path) {
     if (dot != string::npos) s = s.substr(0, dot);
     return s;
 }
-
-static inline string detectSizeTag(const string &instancePath) {
-    if (instancePath.find("j30")  != string::npos) return "j30";
-    if (instancePath.find("j60")  != string::npos) return "j60";
-    if (instancePath.find("j90")  != string::npos) return "j90";
-    if (instancePath.find("j120") != string::npos) return "j120";
+static inline string detectSizeTag(const string &path) {
+    if (path.find("j30")  != string::npos) return "j30";
+    if (path.find("j60")  != string::npos) return "j60";
+    if (path.find("j90")  != string::npos) return "j90";
+    if (path.find("j120") != string::npos) return "j120";
     return "unknown";
 }
 
 // ============================================================
-// Seed CSV parsing
-// Accepts:
-//   New format (recommended):
-//     instanceId,seedType,startTimes...
-//     j301_1,Cmax_opt,0,0,3,5,7,...
-//     j301_1,Cost_opt,0,1,2,4,6,...
-//
-//   Old format (backward compatible):
-//     instanceFile,instanceId,sizeTag,seedType,nValues,values...
-//     where values are numeric dump of schedule_<id>_<seedType>.sol
+//  実験パラメータ
 // ============================================================
+struct ExperimentParams {
+    int    populationSize = 100;
+    int    maxEvaluations = 20000;
+    double crossoverProb  = 0.9;
+    bool   useLocalSearch = true;
 
-static inline vector<string> splitCSVSimple(const string& line) {
-    vector<string> cols;
-    string cur;
-    for (char c : line) {
-        if (c == ',') { cols.push_back(cur); cur.clear(); }
-        else cur.push_back(c);
-    }
-    cols.push_back(cur);
-    return cols;
-}
+    // 時間依存資源制約パラメータ
+    double rr = 0.5;   // resource range (0 = 定数, 0.25/0.5/0.75)
+    bool   rv = true;  // resource vacation
 
-static inline bool parseStartTimesFromSolNumericValues(
-        const vector<double>& vals,
-        vector<int>& startTimesOut) {
-
-    if (vals.size() < 2) return false;
-    int idx = 0;
-    int N = (int)llround(vals[idx++]); // N
-    int R = (int)llround(vals[idx++]); // R
-    if (N <= 0 || R < 0) return false;
-
-    if ((int)vals.size() < idx + R) return false; // caps
-    idx += R;
-
-    startTimesOut.assign(N, 0);
-
-    for (int i = 0; i < N; ++i) {
-        if ((int)vals.size() < idx + 3 + R) return false;
-        int id = (int)llround(vals[idx++]);
-        int st = (int)llround(vals[idx++]);
-        (void)vals[idx++]; // dur (unused)
-        idx += R; // demands
-
-        if (id < 1 || id > N) return false;
-        startTimesOut[id - 1] = st;
-    }
-    return true;
-}
-
-static inline bool loadSeedStartTimesFromCSV(
-        const string& csvPath,
-        const string& instanceId,
-        const string& seedType,     // "Cmax_opt" / "Cost_opt"
-        vector<int>& startTimesOut) {
-
-    ifstream fin(csvPath.c_str());
-    if (!fin) return false;
-
-    string line;
-    if (!getline(fin, line)) return false;
-
-    auto hasNewHeader = [&](const string& s){
-        return (s.find("instanceId") != string::npos &&
-                s.find("seedType")   != string::npos);
-    };
-    auto hasOldHeader = [&](const string& s){
-        return (s.find("instanceFile") != string::npos &&
-                s.find("seedType")     != string::npos);
-    };
-
-    bool firstIsHeader = hasNewHeader(line) || hasOldHeader(line);
-    if (!firstIsHeader) {
-        fin.clear();
-        fin.seekg(0);
-    }
-
-    while (getline(fin, line)) {
-        if (line.empty()) continue;
-        auto cols = splitCSVSimple(line);
-        if (cols.size() < 3) continue;
-
-        // --- New format (instanceId, seedType, startTimes...)
-        // If header exists, first col is "instanceId". Otherwise it's real instanceId.
-        if (cols[0] != "instanceFile" && cols[0] != "instanceId") {
-            const string& iid = cols[0];
-            const string& st  = cols[1];
-            if (iid == instanceId && st == seedType) {
-                startTimesOut.clear();
-                startTimesOut.reserve(cols.size() - 2);
-                for (size_t i = 2; i < cols.size(); ++i) {
-                    if (cols[i].empty()) continue;
-                    startTimesOut.push_back((int)lround(atof(cols[i].c_str())));
-                }
-                return !startTimesOut.empty();
-            }
-        }
-
-        // --- Old format
-        if (cols.size() >= 6) {
-            // 0:instanceFile, 1:instanceId, 2:sizeTag, 3:seedType, 4:nValues, 5.. values
-            if (cols[1] != instanceId) continue;
-            if (cols[3] != seedType) continue;
-
-            int nValues = atoi(cols[4].c_str());
-            if (nValues <= 0) return false;
-            if ((int)cols.size() < 5 + nValues) return false;
-
-            vector<double> vals;
-            vals.reserve(nValues);
-            for (int i = 0; i < nValues; ++i) vals.push_back(atof(cols[5 + i].c_str()));
-            return parseStartTimesFromSolNumericValues(vals, startTimesOut);
-        }
-    }
-    return false;
-}
+    // 再開ペナルティ (P2/P3 専用)
+    int restartPenalty = 2;
+};
 
 // ============================================================
-// Build Topologically feasible solution from start times
-//  - Uses Kahn topo-sort with priority by startTime (then tieKey then id).
-//  - This avoids "[evaluate] Infeasible topological order detected!".
+//  1インスタンス × 1 SplitMode の NSGA-II 実行
 // ============================================================
-
-static inline Solution* buildSolutionFromStartTimes_TopoSafe(
-        Problem* problem,
-        const std::vector<int>& startTimes,
-        int schedObjFill,
-        std::mt19937* rngForTies = nullptr
+static SolutionSet* runNSGAII_splitMode(
+    const string        &instanceFile,
+    SplitMode            mode,
+    const ExperimentParams &params,
+    const string        &costsFile  // インスタンス専用の costs_XXX.csv
 ) {
-    const int nVars = problem->getNumberOfVariables();
-    const int nJobs = nVars / 2;
+    // コストファイルを costs.csv にコピーして RCPSP が読み込めるようにする
+    if (!fileExists(costsFile)) {
+        throw runtime_error("Missing cost file: " + costsFile);
+    }
+    copyFileBinary(costsFile, "costs.csv");
+    RCPSP_Problem::resetGlobalCostSeries();
 
-    // Copy/resize start times
-    std::vector<int> st(nJobs, 0);
-    for (int i = 0; i < nJobs && i < (int)startTimes.size(); ++i) st[i] = startTimes[i];
+    // 問題インスタンス生成
+    RCPSP_Problem *problem = new RCPSP_Problem(
+        instanceFile,
+        4,              // strategy (既存の maxShift 生成戦略)
+        mode,
+        params.restartPenalty
+    );
 
-    auto* rcpsp = dynamic_cast<RCPSP_Problem*>(problem);
-
-    // If not RCPSP, fallback to stable sort by startTime
-    if (!rcpsp) {
-        std::vector<int> order(nJobs);
-        for (int i = 0; i < nJobs; ++i) order[i] = i;
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b){
-            if (st[a] != st[b]) return st[a] < st[b];
-            return a < b;
-        });
-
-        Solution* sol = new Solution(problem);
-        auto* vars = sol->getDecisionVariables();
-        for (int i = 0; i < nJobs; ++i) vars[i]->setValue(order[i]);
-        for (int i = 0; i < nJobs; ++i) vars[nJobs + i]->setValue(schedObjFill);
-        return sol;
+    // 時間依存資源制約の設定
+    // まず専用ファイルがあれば読み込む
+    string capFile = "cap_" + baseNameNoExt(instanceFile) + ".csv";
+    if (!problem->loadTimeVaryingCapacityFromCSV(capFile)) {
+        // なければ乱数生成し、保存しておく
+        problem->generateTimeVaryingCapacity(params.rr, params.rv, 42);
+        problem->writeTimeVaryingCapacityToCSV(capFile);
     }
 
-    // Access successors list (0-based activity ids)
-    const auto& succ = rcpsp->getSuccessors(); // must exist in your RCPSP_Problem
+    problem->setMaxEvaluations(params.maxEvaluations);
 
-    // indegree
-    std::vector<int> indeg(nJobs, 0);
-    for (int u = 0; u < nJobs; ++u) {
-        if (u >= (int)succ.size()) break;
-        for (int v : succ[u]) {
-            if (0 <= v && v < nJobs) indeg[v]++;
-        }
-    }
+    // NSGA-II セットアップ
+    Algorithm *algorithm = new NSGAII(problem);
+    algorithm->setInputParameter("populationSize", const_cast<int*>(&params.populationSize));
+    algorithm->setInputParameter("maxEvaluations", const_cast<int*>(&params.maxEvaluations));
+    int lsFlag = params.useLocalSearch ? 1 : 0;
+    algorithm->setInputParameter("useLocalSearch", &lsFlag);
 
-    // Tie key (random) if requested; otherwise 0.
-    std::vector<int> tieKey(nJobs, 0);
-    if (rngForTies) {
-        std::uniform_int_distribution<int> dist(0, 1'000'000'000);
-        for (int i = 0; i < nJobs; ++i) tieKey[i] = dist(*rngForTies);
-    }
+    double crossP = params.crossoverProb;
+    Operator *crossover  = new PermutationCrossover(crossP);
+    double mutP = 1.0 / (double)problem->getNumberOfVariables();
+    Operator *mutation   = new PermutationMutation(mutP, problem);
+    map<string,void*> selParams;
+    Operator *selection  = new BinaryTournament2(selParams);
 
-    struct Node { int st; int tie; int id; };
-    struct Cmp {
-        bool operator()(const Node& a, const Node& b) const {
-            if (a.st  != b.st)  return a.st  > b.st;   // smaller st first
-            if (a.tie != b.tie) return a.tie > b.tie;  // smaller tie first
-            return a.id > b.id;                        // smaller id first
-        }
-    };
+    algorithm->addOperator("crossover", crossover);
+    algorithm->addOperator("mutation",  mutation);
+    algorithm->addOperator("selection", selection);
 
-    std::priority_queue<Node, std::vector<Node>, Cmp> pq;
-    for (int i = 0; i < nJobs; ++i) if (indeg[i] == 0) pq.push({st[i], tieKey[i], i});
+    SolutionSet *result = algorithm->execute();
 
-    std::vector<int> order;
-    order.reserve(nJobs);
+    delete algorithm;
+    delete problem;
 
-    while (!pq.empty()) {
-        Node cur = pq.top(); pq.pop();
-        int u = cur.id;
-        order.push_back(u);
-
-        if (u < (int)succ.size()) {
-            for (int v : succ[u]) {
-                if (0 <= v && v < nJobs) {
-                    indeg[v]--;
-                    if (indeg[v] == 0) pq.push({st[v], tieKey[v], v});
-                }
-            }
-        }
-    }
-
-    // Fallback (shouldn't happen on PSPLIB)
-    if ((int)order.size() != nJobs) {
-        std::vector<char> used(nJobs, 0);
-        for (int x : order) if (0 <= x && x < nJobs) used[x] = 1;
-        for (int i = 0; i < nJobs; ++i) if (!used[i]) order.push_back(i);
-    }
-
-    Solution* sol = new Solution(problem);
-    auto* vars = sol->getDecisionVariables();
-    for (int i = 0; i < nJobs; ++i) vars[i]->setValue(order[i]);
-    for (int i = 0; i < nJobs; ++i) vars[nJobs + i]->setValue(schedObjFill);
-    return sol;
+    return result;  // 呼び出し元が delete する
 }
 
 // ============================================================
-// main
+//  サマリ CSV への追記
 // ============================================================
+static void appendSummaryCSV(
+    const string &csvPath,
+    const string &instanceId,
+    const string &sizeTag,
+    const string &splitModeStr,
+    double rr, bool rv, int restartPenalty,
+    double avgMakespan, double avgCost,
+    double minMakespan, double minCost,
+    int    paretoSize
+) {
+    bool exists = fileExists(csvPath);
+    ofstream fout(csvPath.c_str(), ios::app);
+    if (!exists) {
+        fout << "instanceId,sizeTag,splitMode,rr,rv,restartPenalty,"
+             << "avgMakespan,avgCost,minMakespan,minCost,paretoSize\n";
+    }
+    fout << instanceId << "," << sizeTag << "," << splitModeStr << ","
+         << rr << "," << (rv ? 1 : 0) << "," << restartPenalty << ","
+         << avgMakespan << "," << avgCost << ","
+         << minMakespan << "," << minCost << ","
+         << paretoSize << "\n";
+}
 
-int main(int argc, char **argv) {
-    // Seed CSV (precomputed by AUGMECON-only project)
-    const string seedCSV = "AUGMECON_two_seeds.csv";
+// ============================================================
+//  1インスタンスで全3モードを比較
+// ============================================================
+static void runThreeModesComparison(
+    const string         &instanceFile,
+    const ExperimentParams &params
+) {
+    string instanceId = baseNameNoExt(instanceFile);
+    string sizeTag    = detectSizeTag(instanceFile);
+    string costsFile  = "costs_" + instanceId + ".csv";
 
-    // cost file naming rule (per instance):
-    // instance "j30.sm/j301_1.sm" => instanceId "j301_1" => costs_j301_1.csv
-    auto costsFileForInstance = [&](const string& instanceFile) -> string {
-        string id = baseNameNoExt(instanceFile);
-        return "costs_" + id + ".csv";
-    };
+    cout << "\n========================================\n";
+    cout << " Instance : " << instanceId << " (" << sizeTag << ")\n";
+    cout << " RR=" << params.rr
+         << " RV=" << (params.rv ? "true" : "false")
+         << " restartPenalty=" << params.restartPenalty << "\n";
+    cout << "========================================\n";
 
-    // copy per-instance costs_XXX.csv -> costs.csv, and reset RCPSP global cache
-    auto ensureCostsForInstance = [&](const string& instanceFile) {
-        string src = costsFileForInstance(instanceFile);
-        if (!fileExists(src)) {
-            throw runtime_error("Missing per-instance cost file: " + src +
-                                " (expected next to executable; ex: costs_j301_1.csv)");
-        }
-        copyFileBinary(src, "costs.csv");
-        cout << "[COST] " << src << " -> costs.csv\n";
-        // IMPORTANT: prevent reuse of previous cost series cache
+    // コストファイルが存在しなければ生成 (初回実行時)
+    if (!fileExists(costsFile)) {
+        // RCPSP_Problem を一時的に作って cost table を生成・保存
         RCPSP_Problem::resetGlobalCostSeries();
+        RCPSP_Problem tmpProb(instanceFile, 4, SplitMode::NO_SPLIT, 0);
+        // costs.csv が生成されるので instanceId 用にコピー保存
+        if (fileExists("costs.csv")) copyFileBinary("costs.csv", costsFile);
+    }
+
+    // 各モード名
+    struct ModeInfo {
+        SplitMode   mode;
+        string      name;
+    };
+    vector<ModeInfo> modes = {
+        { SplitMode::NO_SPLIT,            "P1_NoSplit"           },
+        { SplitMode::NONPREEMPTIVE_SPLIT, "P2_NonPreemptSplit"   },
+        { SplitMode::FREE_SPLIT,          "P3_FreeSplit"         },
     };
 
-    auto runNSGA = [&](const string &instanceFile,
-                       const string &tagPrefix,
-                       bool useAUGSeed,
-                       bool useLocalSearch) {
+    // FUN ファイルを全モード分収集 (C-metric 計算用)
+    map<string, vector<Obj2>> allFronts;
 
-        cout << "============================================\n";
-        cout << "[INFO] NSGA-II run\n";
-        cout << "  instance   : " << instanceFile << "\n";
-        cout << "  tagPrefix  : " << tagPrefix  << "\n";
-        cout << "  AUG seed   : " << (useAUGSeed ? "ON" : "OFF") << "\n";
-        cout << "  LocalSearch: " << (useLocalSearch ? "ON" : "OFF") << "\n";
-        cout << "============================================\n";
+    for (const auto &mi : modes) {
+        cout << "\n[RUN] " << mi.name << "\n";
 
-        Problem *problem = new RCPSP_Problem(instanceFile);
-        Algorithm *algorithm = new NSGAII(problem);
+        SolutionSet *result = runNSGAII_splitMode(
+            instanceFile, mi.mode, params, costsFile);
 
-        int populationSize = 100;
-        int maxEvaluations = 100000;
+        // --- FUN ファイル出力 ---
+        string funFile = "FUN_" + instanceId + "_" + mi.name + ".txt";
+        ofstream fout(funFile.c_str());
 
-        if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem)) {
-            rcpsp->setMaxEvaluations(maxEvaluations);
+        double sumMakespan = 0.0, sumCost = 0.0;
+        double minMakespan = 1e18, minCost = 1e18;
+        int    n = result->size();
+
+        vector<Obj2> front;
+        for (int i = 0; i < n; ++i) {
+            Solution *sol = result->get(i);
+            double f1 = sol->getObjective(0);
+            double f2 = sol->getObjective(1);
+            fout << f1 << " " << f2 << "\n";
+            front.push_back({f1, f2});
+            sumMakespan += f1;  sumCost += f2;
+            if (f1 < minMakespan) minMakespan = f1;
+            if (f2 < minCost)     minCost     = f2;
         }
+        fout.close();
+        allFronts[mi.name] = front;
 
-        algorithm->setInputParameter("populationSize", &populationSize);
-        algorithm->setInputParameter("maxEvaluations", &maxEvaluations);
+        double avgMakespan = (n > 0) ? sumMakespan / n : 0.0;
+        double avgCost     = (n > 0) ? sumCost     / n : 0.0;
 
-        int lsFlag = useLocalSearch ? 1 : 0;
-        algorithm->setInputParameter("useLocalSearch", &lsFlag);
+        cout << "  Pareto front size = " << n << "\n";
+        cout << "  Avg makespan = " << avgMakespan
+             << "  Min makespan = " << minMakespan << "\n";
+        cout << "  Avg cost     = " << avgCost
+             << "  Min cost     = " << minCost     << "\n";
 
-        const int nJobs = problem->getNumberOfVariables() / 2;
+        appendSummaryCSV(
+            "results_summary.csv",
+            instanceId, sizeTag, mi.name,
+            params.rr, params.rv, params.restartPenalty,
+            avgMakespan, avgCost, minMakespan, minCost, n
+        );
 
-        SolutionSet *seedPopulation = nullptr;
-        if (useAUGSeed) {
-            seedPopulation = new SolutionSet(populationSize);
+        delete result;
+    }
 
-            // Derived seeds count per AUGMECON solution (tune)
-            int derivedPerSeed = 0;
-            std::mt19937 rng(1234567);
-
-            auto addSeedAndDerived = [&](const string& stype) {
-                vector<int> st;
-                if (!loadSeedStartTimesFromCSV(seedCSV, tagPrefix, stype, st)) {
-                    cout << "[seed] NG " << stype << " (missing/parse error) instance=" << tagPrefix << "\n";
-                    return;
-                }
-
-                // Base seed (TopoSafe, deterministic ties)
-                {
-                    Solution *s = buildSolutionFromStartTimes_TopoSafe(problem, st, 0, nullptr);
-                    problem->evaluate(s);
-
-
-
-                    seedPopulation->add(s);
-                    cout << "[seed] OK " << stype << " from " << seedCSV << " instance=" << tagPrefix << "\n";
-                }
-
-                // Derived variants: TopoSafe with random tie-breaks
-                for (int k = 0; k < derivedPerSeed && seedPopulation->size() < populationSize; ++k) {
-                    Solution *s = buildSolutionFromStartTimes_TopoSafe(problem, st, 0, &rng);
-                    problem->evaluate(s);
-
-
-                    seedPopulation->add(s);
-                }
-            };
-
-            addSeedAndDerived("Cmax_opt");
-            addSeedAndDerived("Cost_opt");
-
-            if (seedPopulation->size() > 0) {
-                algorithm->setInputParameter("initialPopulation", seedPopulation);
-            } else {
-                delete seedPopulation;
-                seedPopulation = nullptr;
-            }
-        }
-
-        // Operators
-        double crossoverProbability = 0.9;
-        Operator *crossover = new PermutationCrossover(crossoverProbability);
-
-        double mutationProbability = 1.0 / (double)problem->getNumberOfVariables();
-        Operator *mutation = new PermutationMutation(mutationProbability, problem);
-
-        map<string, void *> selectionParameters;
-        Operator *selection = new BinaryTournament2(selectionParameters);
-
-        algorithm->addOperator("crossover", crossover);
-        algorithm->addOperator("mutation", mutation);
-        algorithm->addOperator("selection", selection);
-
-        SolutionSet *population = algorithm->execute();
-
-        string mode =
-            string(useAUGSeed ? "AUG" : "NOAUG") + "_" +
-            string(useLocalSearch ? "LS" : "NOLS");
-
-        ofstream funFile(("FUN_" + tagPrefix + "_" + mode).c_str());
-        ofstream varFile(("VAR_" + tagPrefix + "_" + mode).c_str());
-
-        for (int i = 0; i < population->size(); ++i) {
-            Solution *sol = population->get(i);
-            funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
-
-            int nVar = problem->getNumberOfVariables();
-            Variable **vars = sol->getDecisionVariables();
-            for (int j = 0; j < nVar; ++j) {
-                varFile << vars[j]->getValue();
-                if (j + 1 < nVar) varFile << " ";
-            }
-            varFile << "\n";
-        }
-
-        funFile.close();
-        varFile.close();
-
-        delete population;
-        delete algorithm;
-        delete problem;
-        if (seedPopulation) delete seedPopulation;
-
-        cout << "[INFO] NSGA-II done. Outputs: FUN_" << tagPrefix << "_" << mode
-             << " / VAR_" << tagPrefix << "_" << mode << "\n\n";
+    // --- C-metric 比較 ---
+    // C(P2, P1): P1 の解のうち P2 に支配される割合
+    // C(P3, P1): P1 の解のうち P3 に支配される割合
+    // C(P3, P2): P2 の解のうち P3 に支配される割合
+    struct CMetricEntry { string A; string B; };
+    vector<CMetricEntry> cmetrics = {
+        {"P2_NonPreemptSplit", "P1_NoSplit"},
+        {"P3_FreeSplit",       "P1_NoSplit"},
+        {"P3_FreeSplit",       "P2_NonPreemptSplit"},
+        {"P2_NonPreemptSplit", "P3_FreeSplit"},
     };
 
-    auto runOneInstanceAllModes = [&](const string &instanceFile) {
-        const string sizeTag = detectSizeTag(instanceFile);
-        const string prefix  = baseNameNoExt(instanceFile);
-        if (sizeTag == "unknown") {
-            throw runtime_error("Cannot detect sizeTag from path: " + instanceFile);
+    bool existsCmetric = fileExists("cmetric_comparison.csv");
+    ofstream cmOut("cmetric_comparison.csv", ios::app);
+    if (!existsCmetric) {
+        cmOut << "instanceId,sizeTag,rr,rv,restartPenalty,A,B,C_A_over_B_percent\n";
+    }
+    for (const auto &cm : cmetrics) {
+        if (allFronts.count(cm.A) && allFronts.count(cm.B)) {
+            double c = coveragePercent(allFronts[cm.A], allFronts[cm.B]);
+            cout << "[C-METRIC] C(" << cm.A << ", " << cm.B << ") = " << c << "%\n";
+            cmOut << instanceId << "," << sizeTag << ","
+                  << params.rr << "," << (params.rv ? 1 : 0) << ","
+                  << params.restartPenalty << ","
+                  << cm.A << "," << cm.B << "," << c << "\n";
         }
+    }
+}
 
-        ensureCostsForInstance(instanceFile);
-
-        // 1) baseline: NO AUG seed, NO LS
-        runNSGA(instanceFile, prefix, false, false);
-
-        // 2) local search only
-        runNSGA(instanceFile, prefix, false, true);
-
-        // 3) seed only
-        runNSGA(instanceFile, prefix, true, false);
-
-        // 4) seed + local search
-        runNSGA(instanceFile, prefix, true, true);
-
-        // C-metric: C(AUG_LS, NOAUG_NOLS)
-        {
-            const string funA = "FUN_" + prefix + "_AUG_LS";
-            const string funB = "FUN_" + prefix + "_NOAUG_NOLS";
-            auto A = readFun2(funA);
-            auto B = readFun2(funB);
-
-            double cPercent = coveragePercent(A, B);
-            cout << "[C-METRIC] instance=" << prefix
-                 << " size=" << sizeTag
-                 << " C(AUG_LS, NOAUG_NOLS) = " << cPercent << " [%]"
-                 << " (A=" << A.size() << ", B=" << B.size() << ")\n";
-
-            appendCMetricCSV("Cmetric_by_instance.csv", instanceFile, prefix, sizeTag, cPercent);
-        }
-    };
-
+// ============================================================
+//  main
+// ============================================================
+int main(int argc, char **argv) {
     try {
+        // デフォルト実験パラメータ
+        ExperimentParams params;
+        params.populationSize = 100;
+        params.maxEvaluations = 20000;
+        params.useLocalSearch = true;
+        params.rr             = 0.5;   // resource range
+        params.rv             = true;  // resource vacation
+        params.restartPenalty = 2;     // 再開ペナルティ (タイムステップ数)
+
+        // コマンドライン引数でインスタンスを1つ指定した場合
         if (argc >= 2) {
             string instanceFile = argv[1];
-            runOneInstanceAllModes(instanceFile);
+            // 追加オプション: ./a.out instance.sm rr rv restartPenalty
+            if (argc >= 3) params.rr             = atof(argv[2]);
+            if (argc >= 4) params.rv             = (atoi(argv[3]) != 0);
+            if (argc >= 5) params.restartPenalty = atoi(argv[4]);
+
+            runThreeModesComparison(instanceFile, params);
             return 0;
         }
 
+        // バッチ実行: インスタンスリストを直接記述
         vector<string> instances = {
             "j30.sm/j301_1.sm",
-             "j30.sm/j302_1.sm",
-             "j30.sm/j303_1.sm",
-             "j30.sm/j304_1.sm",
-             "j30.sm/j305_1.sm",
-             "j30.sm/j306_1.sm",
-             "j30.sm/j307_1.sm",
-             "j30.sm/j308_1.sm",
-             "j30.sm/j309_1.sm",
-             "j30.sm/j3010_1.sm",
-             "j30.sm/j3011_1.sm",
-             "j30.sm/j3012_1.sm",
-             "j30.sm/j3013_1.sm",
-             "j30.sm/j3014_1.sm",
-             "j30.sm/j3015_1.sm",
-             "j30.sm/j3016_1.sm",
-             "j30.sm/j3017_1.sm",
-             "j30.sm/j3018_1.sm",
-             "j30.sm/j3019_1.sm",
-             "j30.sm/j3020_1.sm",
-             "j30.sm/j3021_1.sm",
-             "j30.sm/j3022_1.sm",
-             "j30.sm/j3023_1.sm",
-             "j30.sm/j3024_1.sm",
-             "j30.sm/j3025_1.sm",
-             "j30.sm/j3026_1.sm",
-             "j30.sm/j3027_1.sm",
-             "j30.sm/j3028_1.sm",
-             "j30.sm/j3029_1.sm",
-             "j30.sm/j3030_1.sm",
-             "j30.sm/j3031_1.sm",
-             "j30.sm/j3032_1.sm",
-             "j30.sm/j3033_1.sm",
-             "j30.sm/j3034_1.sm",
-             "j30.sm/j3035_1.sm",
-             "j30.sm/j3036_1.sm",
-             "j30.sm/j3037_1.sm",
-             "j30.sm/j3038_1.sm",
-             "j30.sm/j3039_1.sm",
-             "j30.sm/j3040_1.sm",
-             "j30.sm/j3041_1.sm",
-             "j30.sm/j3042_1.sm",
-             "j30.sm/j3043_1.sm",
-             "j30.sm/j3044_1.sm",
-             "j30.sm/j3045_1.sm",
-             "j30.sm/j3046_1.sm",
-             "j30.sm/j3047_1.sm",
-             "j30.sm/j3048_1.sm",
-             "j60.sm/j601_1.sm",
-             "j60.sm/j602_1.sm",
-             "j60.sm/j603_1.sm",
-             "j60.sm/j604_1.sm",
-             "j60.sm/j605_1.sm",
-             "j60.sm/j606_1.sm",
-             "j60.sm/j607_1.sm",
-             "j60.sm/j608_1.sm",
-             "j60.sm/j609_1.sm",
-             "j60.sm/j6010_1.sm",
-             "j60.sm/j6011_1.sm",
-             "j60.sm/j6012_1.sm",
-             "j60.sm/j6013_1.sm",
-             "j60.sm/j6014_1.sm",
-             "j60.sm/j6015_1.sm",
-             "j60.sm/j6016_1.sm",
-             "j60.sm/j6017_1.sm",
-             "j60.sm/j6018_1.sm",
-             "j60.sm/j6019_1.sm",
-             "j60.sm/j6020_1.sm",
-             "j60.sm/j6021_1.sm",
-             "j60.sm/j6022_1.sm",
-             "j60.sm/j6023_1.sm",
-             "j60.sm/j6024_1.sm",
-             "j60.sm/j6025_1.sm",
-             "j60.sm/j6026_1.sm",
-             "j60.sm/j6027_1.sm",
-             "j60.sm/j6028_1.sm",
-             "j60.sm/j6029_1.sm",
-             "j60.sm/j6030_1.sm",
-             "j60.sm/j6031_1.sm",
-             "j60.sm/j6032_1.sm",
-             "j60.sm/j6033_1.sm",
-             "j60.sm/j6034_1.sm",
-             "j60.sm/j6035_1.sm",
-             "j60.sm/j6036_1.sm",
-             "j60.sm/j6037_1.sm",
-             "j60.sm/j6038_1.sm",
-             "j60.sm/j6039_1.sm",
-             "j60.sm/j6040_1.sm",
-             "j60.sm/j6041_1.sm",
-             "j60.sm/j6042_1.sm",
-             "j60.sm/j6043_1.sm",
-             "j60.sm/j6044_1.sm",
-             "j60.sm/j6045_1.sm",
-             "j60.sm/j6046_1.sm",
-             "j60.sm/j6047_1.sm",
-             "j60.sm/j6048_1.sm",
-             "j90.sm/j901_1.sm",
-             "j90.sm/j902_1.sm",
-             "j90.sm/j903_1.sm",
-             "j90.sm/j904_1.sm",
-             "j90.sm/j905_1.sm",
-             "j90.sm/j906_1.sm",
-             "j90.sm/j907_1.sm",
-             "j90.sm/j908_1.sm",
-             "j90.sm/j909_1.sm",
-             "j90.sm/j9010_1.sm",
-             "j90.sm/j9011_1.sm",
-             "j90.sm/j9012_1.sm",
-             "j90.sm/j9013_1.sm",
-             "j90.sm/j9014_1.sm",
-             "j90.sm/j9015_1.sm",
-             "j90.sm/j9016_1.sm",
-             "j90.sm/j9017_1.sm",
-             "j90.sm/j9018_1.sm",
-             "j90.sm/j9019_1.sm",
-             "j90.sm/j9020_1.sm",
-             "j90.sm/j9021_1.sm",
-             "j90.sm/j9022_1.sm",
-             "j90.sm/j9023_1.sm",
-             "j90.sm/j9024_1.sm",
-             "j90.sm/j9025_1.sm",
-             "j90.sm/j9026_1.sm",
-             "j90.sm/j9027_1.sm",
-             "j90.sm/j9028_1.sm",
-             "j90.sm/j9029_1.sm",
-             "j90.sm/j9030_1.sm",
-             "j90.sm/j9031_1.sm",
-             "j90.sm/j9032_1.sm",
-             "j90.sm/j9033_1.sm",
-             "j90.sm/j9034_1.sm",
-             "j90.sm/j9035_1.sm",
-             "j90.sm/j9036_1.sm",
-             "j90.sm/j9037_1.sm",
-             "j90.sm/j9038_1.sm",
-             "j90.sm/j9039_1.sm",
-             "j90.sm/j9040_1.sm",
-             "j90.sm/j9041_1.sm",
-             "j90.sm/j9042_1.sm",
-             "j90.sm/j9043_1.sm",
-             "j90.sm/j9044_1.sm",
-             "j90.sm/j9045_1.sm",
-             "j90.sm/j9046_1.sm",
-             "j90.sm/j9047_1.sm",
-             "j90.sm/j9048_1.sm",
-            "j120.sm/j1201_1.sm",
-             "j120.sm/j1202_1.sm",
-             "j120.sm/j1203_1.sm",
-             "j120.sm/j1204_1.sm",
-             "j120.sm/j1205_1.sm",
-             "j120.sm/j1206_1.sm",
-             "j120.sm/j1207_1.sm",
-             "j120.sm/j1208_1.sm",
-             "j120.sm/j1209_1.sm",
-             "j120.sm/j12010_1.sm",
-             "j120.sm/j12011_1.sm",
-             "j120.sm/j12012_1.sm",
-             "j120.sm/j12013_1.sm",
-             "j120.sm/j12014_1.sm",
-             "j120.sm/j12015_1.sm",
-             "j120.sm/j12016_1.sm",
-             "j120.sm/j12017_1.sm",
-             "j120.sm/j12018_1.sm",
-             "j120.sm/j12019_1.sm",
-             "j120.sm/j12020_1.sm",
-             "j120.sm/j12021_1.sm",
-             "j120.sm/j12022_1.sm",
-             "j120.sm/j12023_1.sm",
-             "j120.sm/j12024_1.sm",
-             "j120.sm/j12025_1.sm",
-             "j120.sm/j12026_1.sm",
-             "j120.sm/j12027_1.sm",
-             "j120.sm/j12028_1.sm",
-             "j120.sm/j12029_1.sm",
-             "j120.sm/j12030_1.sm",
-             "j120.sm/j12031_1.sm",
-             "j120.sm/j12032_1.sm",
-             "j120.sm/j12033_1.sm",
-             "j120.sm/j12034_1.sm",
-             "j120.sm/j12035_1.sm",
-             "j120.sm/j12036_1.sm",
-             "j120.sm/j12037_1.sm",
-             "j120.sm/j12038_1.sm",
-             "j120.sm/j12039_1.sm",
-             "j120.sm/j12040_1.sm",
-             "j120.sm/j12041_1.sm",
-             "j120.sm/j12042_1.sm",
-             "j120.sm/j12043_1.sm",
-             "j120.sm/j12044_1.sm",
-             "j120.sm/j12045_1.sm",
-             "j120.sm/j12046_1.sm",
-             "j120.sm/j12047_1.sm",
-             "j120.sm/j12048_1.sm",
-             "j120.sm/j12049_1.sm",
-             "j120.sm/j12050_1.sm",
-             "j120.sm/j12051_1.sm",
-             "j120.sm/j12052_1.sm",
-             "j120.sm/j12053_1.sm",
-             "j120.sm/j12054_1.sm",
-             "j120.sm/j12055_1.sm",
-             "j120.sm/j12056_1.sm",
-             "j120.sm/j12057_1.sm",
-             "j120.sm/j12058_1.sm",
-             "j120.sm/j12059_1.sm",
-             "j120.sm/j12060_1.sm"
-
+            "j30.sm/j302_1.sm",
+            "j30.sm/j303_1.sm",
+            // 必要に応じてコメントアウトを解除
+            // "j60.sm/j601_1.sm",
+            // "j90.sm/j901_1.sm",
         };
 
-        for (const auto &inst : instances) runOneInstanceAllModes(inst);
+        // 複数の実験条件を試す
+        vector<ExperimentParams> conditions;
+        {
+            // 条件1: RR=0.5, RV=true,  restartPenalty=2 (デフォルト)
+            ExperimentParams p1 = params;
+            p1.rr = 0.5; p1.rv = true;  p1.restartPenalty = 2;
+            conditions.push_back(p1);
 
-        cout << "[BATCH] All done.\n";
+            // 条件2: RR=0.5, RV=true,  restartPenalty=0 (ペナルティなし比較用)
+            ExperimentParams p2 = params;
+            p2.rr = 0.5; p2.rv = true;  p2.restartPenalty = 0;
+            conditions.push_back(p2);
+
+            // 条件3: RR=0.75, RV=true, restartPenalty=2 (高 variability)
+            ExperimentParams p3 = params;
+            p3.rr = 0.75; p3.rv = true;  p3.restartPenalty = 2;
+            conditions.push_back(p3);
+
+            // 条件4: RR=0.0, RV=false (定数制約: P2=P1 のはず)
+            ExperimentParams p4 = params;
+            p4.rr = 0.0; p4.rv = false; p4.restartPenalty = 2;
+            conditions.push_back(p4);
+        }
+
+        for (const auto &cond : conditions) {
+            for (const auto &inst : instances) {
+                runThreeModesComparison(inst, cond);
+            }
+        }
+
+        cout << "\n[BATCH] All done.\n";
         return 0;
 
     } catch (const exception &e) {
-        cerr << "[ERROR] " << e.what() << endl;
+        cerr << "[ERROR] " << e.what() << "\n";
         return 1;
     }
 }
-
 
 
 
