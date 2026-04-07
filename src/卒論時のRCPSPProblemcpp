@@ -15,25 +15,6 @@
 
 static std::mt19937 rng(12345);
 
-// ============================================================
-// [追加] capacityAt() ヘルパー
-//   capacity_t[k][t] が設定済みならその値を返す
-//   未設定（空）なら従来通り capacity[k] を返す
-//   → これだけで RR/RV が全体に反映される
-// ============================================================
-static int capacityAt(const RCPSP_Instance &inst, int k, int t) {
-    if (!inst.capacity_t.empty()
-        && k < (int)inst.capacity_t.size()
-        && t >= 0
-        && t < (int)inst.capacity_t[k].size()) {
-        return inst.capacity_t[k][t];
-    }
-    return inst.capacity[k];
-}
-
-// ============================================================
-// schedule_feasible: capacity[k] → capacityAt() に変更（1行だけ）
-// ============================================================
 bool schedule_feasible(const RCPSP_Instance &instance, const std::vector<int> &startTimes) {
     int nJobs = instance.nJobs;
     int nRes  = instance.nRes;
@@ -55,8 +36,7 @@ bool schedule_feasible(const RCPSP_Instance &instance, const std::vector<int> &s
         for (int t = st; t < ft; ++t) {
             for (int k = 0; k < nRes; ++k) {
                 timeResourceUsage[t][k] += instance.demand[j][k];
-                // [変更] instance.capacity[k] → capacityAt(instance, k, t)
-                if (timeResourceUsage[t][k] > capacityAt(instance, k, t)) {
+                if (timeResourceUsage[t][k] > instance.capacity[k]) {
                     return false;
                 }
             }
@@ -97,7 +77,9 @@ static std::vector<std::vector<double>> COST_TABLE;
 
 static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
     std::ifstream fin(filename);
-    if (!fin) return false;
+    if (!fin) {
+        return false;
+    }
 
     int R = 0, T = 0;
     if (!(fin >> R >> T)) {
@@ -154,6 +136,7 @@ static bool writeCostTableToCSV(const std::string &filename) {
     return true;
 }
 
+// Reset the global cost series so the next instance will (re)load or (re)generate costs.
 static void resetCostSeriesInternal() {
     COST_INITIALIZED = false;
     COST_T = -1;
@@ -162,9 +145,18 @@ static void resetCostSeriesInternal() {
     std::cout << "[RCPSP_Problem] Reset global cost series.\n";
 }
 
-static void generateCostSeries(int R, int T) {
-    if (loadCostTableFromCSV("costs.csv", R)) return;
 
+
+// horizon T に対して全資源のコスト系列を生成
+//  costs.csv があればそれを使う
+//   なければ論文パターンに従ってランダム生成
+static void generateCostSeries(int R, int T) {
+    // まず costs.csv を試す
+    if (loadCostTableFromCSV("costs.csv", R)) {
+        return;
+    }
+
+    // CSV が無ければ、論文通りのパターンでランダム生成
     CostRNG crng;
     if (T <= 0) T = 1;
 
@@ -172,10 +164,16 @@ static void generateCostSeries(int R, int T) {
 
     for (int k = 0; k < R; ++k) {
         int pattern = (k % 4) + 1;
+
+        // α ~ U[100,200]
         double alpha = crng.uniform(100.0, 200.0);
+
+        // β の生成
         double beta = 0.0;
         double threshold = (2.0 * T > 0.0) ? (alpha / (2.0 * T)) : 0.0;
+
         bool positiveTrend = (pattern == 1 || pattern == 3);
+
         if (positiveTrend) {
             if (threshold > 0.1) beta = crng.uniform(0.1, threshold);
             else                 beta = 0.1;
@@ -183,6 +181,8 @@ static void generateCostSeries(int R, int T) {
             if (threshold > 0.1) beta = crng.uniform(-threshold, -0.1);
             else                 beta = -0.1;
         }
+
+        // 季節性 γ_t
         std::vector<double> gamma_seq;
         if (pattern == 3 || pattern == 4) {
             double Gamma = crng.uniform(20.0, 30.0);
@@ -190,38 +190,58 @@ static void generateCostSeries(int R, int T) {
         } else {
             gamma_seq = std::vector<double>(12, 0.0);
         }
+
+        // 各時刻 t のコスト c_{k,t}
         for (int t = 0; t < T; ++t) {
             double gamma_t = gamma_seq[t % gamma_seq.size()];
-            double omega_t = crng.normal(0.0, 5.0);
+            double omega_t = crng.normal(0.0, 5.0); // ω_t ~ N(0,5)
+
             double c = alpha + beta * t + gamma_t + omega_t;
             if (c < 0.0) c = 0.0;
+
             COST_TABLE[k][t] = c;
         }
     }
 
-    COST_R = R; COST_T = T; COST_INITIALIZED = true;
+    COST_R           = R;
+    COST_T           = T;
+    COST_INITIALIZED = true;
+
+        // Save for reproducibility / for subsequent runs of the same size
     writeCostTableToCSV("costs.csv");
-    std::cout << "[RCPSP_Problem] Generated random cost series (R=" << R << ", T=" << T << ")\n";
+
+std::cout << "[RCPSP_Problem] Generated random cost series (R="
+              << R << ", T=" << T << ")\n";
 }
 
+// c_{k,t} を返す（必要ならシリーズを初期化）
 static double resourceCost(int k, int t, int horizon) {
     if (!COST_INITIALIZED) {
-        if (COST_R <= 0) COST_R = 4;
+        // 初回呼び出し時のみシリーズを用意
+        if (COST_R <= 0) COST_R = 4; // デフォルト。コンストラクタで上書きされる
         generateCostSeries(COST_R, horizon);
     }
+
     if (COST_T <= 0) return 1.0;
+
     if (k < 0) k = 0;
     if (k >= COST_R) k = COST_R - 1;
+
     if (t < 0) t = 0;
     if (t >= COST_T) t = COST_T - 1;
+
     return COST_TABLE[k][t];
 }
 
 // ==== maxShift =====
 static void buildMaxShiftVector(
-        int strategy, int T, int nJobs,
-        int evalCounter, int maxEvaluations,
-        std::vector<int> &maxShift) {
+        int strategy,
+        int T,
+        int nJobs,
+        int evalCounter,
+        int maxEvaluations,
+        std::vector<int> &maxShift
+) {
     maxShift.assign(nJobs, 0);
     if (T <= 0) T = 1;
     int halfT = std::max(1, T / 2);
@@ -236,39 +256,54 @@ static void buildMaxShiftVector(
         int m = randIn(1, halfT);
         std::fill(maxShift.begin(), maxShift.end(), m);
     } else if (strategy == 2) {
-        for (int j = 0; j < nJobs; ++j) maxShift[j] = randIn(1, halfT);
+        for (int j = 0; j < nJobs; ++j) {
+            maxShift[j] = randIn(1, halfT);
+        }
     } else {
         double ratio = 0.0;
-        if (maxEvaluations > 0) ratio = static_cast<double>(evalCounter) / maxEvaluations;
+        if (maxEvaluations > 0) {
+            ratio = static_cast<double>(evalCounter) / maxEvaluations;
+        }
+
         int A = 1, B = halfT;
-        if      (ratio < 0.10) { A = 1;                B = std::max(1, T/8); }
-        else if (ratio < 0.30) { A = std::max(1,T/8+1);  B = std::max(A, T/4); }
-        else if (ratio < 0.60) { A = std::max(1,T/4+1);  B = std::max(A, 3*T/8); }
-        else                   { A = std::max(1,3*T/8+1); B = std::max(A, halfT); }
+        if (ratio < 0.10) {
+            A = 1;
+            B = std::max(1, T / 8);
+        } else if (ratio < 0.30) {
+            A = std::max(1, T / 8 + 1);
+            B = std::max(A, T / 4);
+        } else if (ratio < 0.60) {
+            A = std::max(1, T / 4 + 1);
+            B = std::max(A, 3 * T / 8);
+        } else {
+            A = std::max(1, 3 * T / 8 + 1);
+            B = std::max(A, halfT);
+        }
+
         if (strategy == 3) {
             int m = randIn(A, B);
             std::fill(maxShift.begin(), maxShift.end(), m);
         } else {
-            for (int j = 0; j < nJobs; ++j) maxShift[j] = randIn(A, B);
+            for (int j = 0; j < nJobs; ++j) {
+                maxShift[j] = randIn(A, B);
+            }
         }
     }
+
     if (nJobs > 0) maxShift[0]       = 0;
     if (nJobs > 1) maxShift[nJobs-1] = 0;
 }
 
-// ============================================================
-// [変更] コンストラクタ: 引数に rr, rv を追加
-//   デフォルト値 rr=0.0, rv=false のため
-//   既存の呼び出し new RCPSP_Problem(file) はそのまま動く
-// ============================================================
-RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
-                              double rr, bool rv)
-        : Problem(), strategy_(strategy), instance(readPSPLIB_SM(filename)) {
+// ==== コンストラクタ ====
+RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy)
+        : Problem(), strategy_(strategy),instance(readPSPLIB_SM(filename)){
 
-    std::cout << "[RCPSP_Problem] Loading instance from " << filename
-              << "  RR=" << rr << "  RV=" << (rv ? 1 : 0) << std::endl;
+    std::cout << "[RCPSP_Problem] Loading instance from " << filename << std::endl;
+
+
 
     numberOfJobs_ = instance.nJobs;
+
     numberOfVariables_ = numberOfJobs_ * 2;
     numberOfObjectives_ = 2;
 
@@ -279,6 +314,7 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
         lowerLimit_[i] = 0;
         upperLimit_[i] = numberOfJobs_ - 1;
     }
+
     for (int i = numberOfJobs_; i < numberOfVariables_; ++i) {
         lowerLimit_[i] = 0;
         upperLimit_[i] = 1;
@@ -286,87 +322,13 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
 
     solutionType_ = new IntSolutionType(this);
 
+    // コスト表用の資源数をセットし、毎インスタンスごとにリセット
     COST_R           = instance.nRes;
     COST_INITIALIZED = false;
     COST_T           = -1;
 
-    // ============================================================
-    // [追加] RR>0 または RV=true のとき時間依存容量テーブルを生成
-    //   rr=0.0 かつ rv=false → capacity_t は空 → 既存通り capacity[k] 使用
-    // ============================================================
-    if (rr > 0.0 || rv) {
-        buildTimeVaryingCapacity(rr, rv);
-    }
-
     std::cout << "[RCPSP_Problem] nJobs=" << instance.nJobs
               << " nRes=" << instance.nRes << std::endl;
-}
-
-// ============================================================
-// [新規追加] buildTimeVaryingCapacity
-//
-//   論文 Appendix A Step5-7 の忠実な実装
-//
-//   Step5: U_kt ~ Uniform(U0_k*(1-rr),  U0_k*(1+rr))
-//     rr = 0.0  → 全時刻で U0_k（定数、RR=0 に相当）
-//     rr = 0.25 → 論文の RR=0.25
-//     rr = 0.5  → 論文の RR=0.5
-//     rr = 0.75 → 論文の RR=0.75
-//
-//   Step7: rv=true のとき MOD(t,14)==vacDay を容量0にする
-//     vacDay は rn<0.5 なら 0、そうでなければ 7（論文 Step7 通り）
-// ============================================================
-void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv) {
-    int nRes = instance.nRes;
-
-    // ホライゾン T = 全 duration の合計 × 余裕係数
-    // RV あり の場合は休暇日の分だけ余裕を大きくする
-    int T = 0;
-    for (int d : instance.duration) T += d;
-    T = static_cast<int>(T * (rv ? 2.0 : 1.5)) + 10;
-    if (T <= 0) T = 100;
-
-    // 毎回異なる乱数列を使う
-    static thread_local std::mt19937 capRng(std::random_device{}());
-
-    instance.capacity_t.assign(nRes, std::vector<int>(T, 0));
-
-    for (int k = 0; k < nRes; ++k) {
-        double U0 = static_cast<double>(instance.capacity[k]);
-
-        // ---- Step 5: Resource Range ----
-        for (int t = 0; t < T; ++t) {
-            int cap;
-            if (rr == 0.0) {
-                // RR=0: 定数（時間依存なし）
-                cap = instance.capacity[k];
-            } else {
-                double lo = U0 * (1.0 - rr);
-                double hi = U0 * (1.0 + rr);
-                if (lo < 0.0) lo = 0.0;  // 負にならないようガード
-                std::uniform_real_distribution<> dist(lo, hi);
-                cap = static_cast<int>(std::round(dist(capRng)));
-                if (cap < 0) cap = 0;
-            }
-            instance.capacity_t[k][t] = cap;
-        }
-
-        // ---- Step 7: Resource Vacation ----
-        if (rv) {
-            // rn を生成して vacDay を決定（論文 Step7 通り）
-            std::uniform_real_distribution<> u01(0.0, 1.0);
-            int vacDay = (u01(capRng) < 0.5) ? 0 : 7;
-            for (int t = 0; t < T; ++t) {
-                if (t % 14 == vacDay) {
-                    instance.capacity_t[k][t] = 0;  // 資源休暇
-                }
-            }
-        }
-    }
-
-    std::cout << "[RCPSP_Problem] Built time-varying capacity"
-              << " (nRes=" << nRes << ", T=" << T
-              << ", RR=" << rr << ", RV=" << (rv ? 1 : 0) << ")\n";
 }
 
 void RCPSP_Problem::printInfo() const {
@@ -390,9 +352,12 @@ bool RCPSP_Problem::checkTopological(const std::vector<int> &seq) const {
         pos[j] = i;
     }
 
+    // 先行関係をすべて守っているか
     for (int j = 0; j < numberOfJobs_; ++j) {
         for (int succ : instance.successors[j]) {
-            if (pos[succ] <= pos[j]) return false;
+            if (pos[succ] <= pos[j]) {
+                return false;
+            }
         }
     }
     return true;
@@ -443,16 +408,9 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     if (n > 0) schedObj[0]     = 0;
     if (n > 1) schedObj[n - 1] = 0;
 
-    // ============================================================
-    // [変更] T の計算
-    //   capacity_t のホライゾンが長い場合はそちらを使う
-    //   (buildTimeVaryingCapacity が休暇込みの余裕を設定済み)
-    // ============================================================
     int T = 0;
-    for (int j = 0; j < n; ++j) T += instance.duration[j];
-    if (!instance.capacity_t.empty() && !instance.capacity_t[0].empty()) {
-        int tvT = static_cast<int>(instance.capacity_t[0].size());
-        if (tvT > T) T = tvT;
+    for (int j = 0; j < n; ++j) {
+        T += instance.duration[j];
     }
     if (T <= 0) T = 1;
 
@@ -474,10 +432,6 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     std::vector<int> start(n, 0);
     std::vector<int> finish(n, 0);
 
-    // ============================================================
-    // [変更] canPlace: capacity[k] → capacityAt() に変更（1行だけ）
-    //   これだけで RR/RV が評価全体に反映される
-    // ============================================================
     auto canPlace = [&](int j, int t) {
         int d = instance.duration[j];
         if (d <= 0) return true;
@@ -487,8 +441,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
         for (int tau = t; tau < t + d; ++tau) {
             for (int k = 0; k < nRes; ++k) {
                 int used = usage[k][tau] + instance.demand[j][k];
-                // [変更] instance.capacity[k] → capacityAt(instance, k, tau)
-                if (used > capacityAt(instance, k, tau)) return false;
+                if (used > instance.capacity[k]) return false;
             }
         }
         return true;
@@ -548,6 +501,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
                 --t_mak;
             }
             if (t_mak < 0) {
+                // std::cerr << "[ERROR] Cannot place job " << j << " in schedule!" << std::endl;
                 solution->setObjective(0, 1e9);
                 solution->setObjective(1, 1e9);
                 return;
@@ -606,7 +560,7 @@ static bool dominatesSolution(Solution *a, Solution *b) {
         double va = a->getObjective(i);
         double vb = b->getObjective(i);
 
-        if (va > vb) return false;
+        if (va > vb) return false;   // a が劣っている
         if (va < vb) betterInAtLeastOne = true;
     }
     return betterInAtLeastOne;
@@ -620,8 +574,9 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
     int nVars = solution->getNumberOfVariables();
 
     if (nVars < 2 * nJobs) return;
-    if (nJobs <= 2) return;
+    if (nJobs <= 2) return; // 0 と nJobs-1 が固定
 
+    // 候補ジョブのリスト（0 と nJobs-1 は除外）
     std::vector<int> jobs;
     for (int j = 1; j <= nJobs - 2; ++j) {
         jobs.push_back(j);
@@ -630,24 +585,29 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
 
     int acceptedMoves = 0;
 
+    // 改善が見つからなくなるまで繰り返す
     while (true) {
         bool improvedInThisSweep = false;
 
+        // ジョブ集合を毎回シャッフルしてから全探索
         std::shuffle(jobs.begin(), jobs.end(), rng);
 
         for (int idx = 0; idx < (int)jobs.size(); ++idx) {
             int j = jobs[idx];
 
+            // 近傍解を複製
             Solution *neighbor = new Solution(solution);
 
             Variable **varsN = neighbor->getDecisionVariables();
-            int schedIndex = nJobs + j;
+            int schedIndex = nJobs + j;  // 後半が schedObj
 
             int old = (int)varsN[schedIndex]->getValue();
-            varsN[schedIndex]->setValue(1 - old);
+            varsN[schedIndex]->setValue(1 - old);  // 0 <-> 1 反転
 
+            // 評価
             this->evaluate(neighbor);
 
+            // 近傍が現在の解をパレート優越するなら、その場で受け入れ
             if (dominatesSolution(neighbor, solution)) {
                 Variable **varsS = solution->getDecisionVariables();
                 for (int k = 0; k < nVars; ++k) {
@@ -660,14 +620,23 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
                 improvedInThisSweep = true;
                 ++acceptedMoves;
                 delete neighbor;
+
+
                 break;
             }
 
             delete neighbor;
         }
 
-        if (!improvedInThisSweep) break;
-        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) break;
+        // このスイープで一度も改善が見つからなければ終了
+        if (!improvedInThisSweep) {
+            break;
+        }
+
+
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
     }
 }
 
@@ -679,11 +648,16 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
 
     Variable **vars = solution->getDecisionVariables();
 
+
     std::vector<int> seq(nJobs);
     for (int i = 0; i < nJobs; ++i) {
         seq[i] = (int)vars[i]->getValue();
     }
-    if (!checkTopological(seq)) return;
+    //トポロジカルでないなら何もしない
+    if (!checkTopological(seq)) {
+        return;
+    }
+
 
     std::vector<std::vector<int>> preds(nJobs);
     for (int j = 0; j < nJobs; ++j) {
@@ -696,12 +670,15 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
 
     int acceptedMoves = 0;
 
+    // 改善が出なくなるまで繰り返す
     while (true) {
         bool improvedInThisSweep = false;
 
+        // 位置 i<j の全ペアを作る
         std::vector<std::pair<int,int>> candPairs;
         for (int i = 0; i < nJobs - 1; ++i) {
             for (int j = i + 1; j < nJobs; ++j) {
+
                 if (seq[i] == 0 || seq[i] == nJobs-1) continue;
                 if (seq[j] == 0 || seq[j] == nJobs-1) continue;
                 candPairs.emplace_back(i, j);
@@ -709,47 +686,72 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
         }
         if (candPairs.empty()) break;
 
+
         std::shuffle(candPairs.begin(), candPairs.end(), rng);
 
+
         std::vector<int> pos(nJobs);
-        for (int p = 0; p < nJobs; ++p) pos[seq[p]] = p;
+        for (int p = 0; p < nJobs; ++p) {
+            pos[seq[p]] = p;
+        }
 
         for (auto &pr : candPairs) {
             int i = pr.first;
             int j = pr.second;
             if (i >= j) continue;
 
-            int a = seq[i];
-            int b = seq[j];
+            int a = seq[i];   // i にいる job
+            int b = seq[j];   // j にいる job
+
+            // precedence を壊さないかチェック
+
 
             bool bad = false;
-            for (int s : instance.successors[a]) if (s == b) { bad = true; break; }
-            if (!bad) for (int s : instance.successors[b]) if (s == a) { bad = true; break; }
+            for (int s : instance.successors[a]) {
+                if (s == b) { bad = true; break; }
+            }
+            if (!bad) {
+                for (int s : instance.successors[b]) {
+                    if (s == a) { bad = true; break; }
+                }
+            }
             if (bad) continue;
 
+            // i〜j の間に「a の後続」がいないか
             for (int s : instance.successors[a]) {
                 int ps = pos[s];
-                if (i < ps && ps < j) { bad = true; break; }
+                if (i < ps && ps < j) {
+                    bad = true;
+                    break;
+                }
             }
             if (bad) continue;
 
+            // i〜j の間に「b の先行」がいないか
             for (int pPred : preds[b]) {
                 int pp = pos[pPred];
-                if (i < pp && pp < j) { bad = true; break; }
+                if (i < pp && pp < j) {
+                    bad = true;
+                    break;
+                }
             }
             if (bad) continue;
 
+            //swap した近傍解を評価
             Solution *neighbor = new Solution(solution);
             Variable **varsN = neighbor->getDecisionVariables();
 
+            // 順序部分だけ swap
             double vi = varsN[i]->getValue();
             double vj = varsN[j]->getValue();
             varsN[i]->setValue(vj);
             varsN[j]->setValue(vi);
 
+            // 評価
             this->evaluate(neighbor);
 
             if (dominatesSolution(neighbor, solution)) {
+                // 改善なら採用
                 Variable **varsS = solution->getDecisionVariables();
                 for (int k = 0; k < nVars; ++k) {
                     varsS[k]->setValue(varsN[k]->getValue());
@@ -757,6 +759,7 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
                 for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
                     solution->setObjective(o, neighbor->getObjective(o));
                 }
+
 
                 std::swap(seq[i], seq[j]);
 
@@ -769,10 +772,19 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
             delete neighbor;
         }
 
-        if (!improvedInThisSweep) break;
-        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) break;
+        if (!improvedInThisSweep) {
+            // 改善がなければ局所最適
+            break;
+        }
+
+        if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) {
+            break;
+        }
     }
 }
+
+
+
 
 Solution* RCPSP_Problem::createRandomTopoSolution() {
     int nJobs = numberOfJobs_;
@@ -781,51 +793,84 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
     Solution* sol = new Solution(this);
     Variable** vars = sol->getDecisionVariables();
 
+
+
+
     std::vector<int> indeg(nJobs, 0);
     for (int j = 0; j < nJobs; ++j) {
         for (int succ : instance.successors[j]) {
-            if (succ >= 0 && succ < nJobs) ++indeg[succ];
+            if (succ >= 0 && succ < nJobs) {
+                ++indeg[succ];
+            }
         }
     }
+
 
     std::vector<int> avail;
     avail.reserve(nJobs);
     for (int j = 0; j < nJobs; ++j) {
-        if (indeg[j] == 0) avail.push_back(j);
+        if (indeg[j] == 0) {
+            avail.push_back(j);
+        }
     }
 
     std::vector<int> perm;
     perm.reserve(nJobs);
 
     while (!avail.empty()) {
+
         std::uniform_int_distribution<int> dist(0, (int)avail.size() - 1);
         int idx = dist(rng);
         int j = avail[idx];
+
+
         avail[idx] = avail.back();
         avail.pop_back();
+
+
         perm.push_back(j);
+
+
         for (int succ : instance.successors[j]) {
             if (succ >= 0 && succ < nJobs) {
-                if (--indeg[succ] == 0) avail.push_back(succ);
+                if (--indeg[succ] == 0) {
+                    avail.push_back(succ);
+                }
             }
         }
     }
+
 
     if ((int)perm.size() != nJobs) {
         perm.resize(nJobs);
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)perm[i]);
+
+    for (int i = 0; i < nJobs; ++i) {
+        vars[i]->setValue((double)perm[i]);
+    }
+
+
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
-        if (idx < nVars) vars[idx]->setValue(0.0);
+        if (idx < nVars) {
+            vars[idx]->setValue(0.0);
+        }
     }
+
     if (nJobs > 0 && nJobs < nVars)   vars[nJobs + 0]->setValue(0.0);
-    if (nJobs > 1 && nJobs + nJobs - 1 < nVars) vars[nJobs + nJobs - 1]->setValue(0.0);
+    if (nJobs > 1 && nJobs + nJobs - 1 < nVars)
+        vars[nJobs + nJobs - 1]->setValue(0.0);
 
     return sol;
 }
+
+
+
+
+
+
 
 // ===== RCPSP_Problem: global cost series control =====
 void RCPSP_Problem::resetGlobalCostSeries() {
@@ -835,3 +880,4 @@ void RCPSP_Problem::resetGlobalCostSeries() {
 bool RCPSP_Problem::writeGlobalCostSeriesCSV(const std::string &filename) {
     return writeCostTableToCSV(filename);
 }
+

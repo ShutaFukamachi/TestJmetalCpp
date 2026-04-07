@@ -1,119 +1,62 @@
+#pragma once
 #ifndef RCPSP_PROBLEM_H
 #define RCPSP_PROBLEM_H
 
-#include "Problem.h"
+#include "core/Problem.h"
+#include "Solution.h"
 #include "IntSolutionType.h"
 #include "RCPSP_Reader.h"
-#include <vector>
 #include <string>
-#include <random>
-
-class Solution;
+#include <vector>
 
 class RCPSP_Problem : public Problem {
 public:
-    // ここが局所探索の公開メソッド宣言
-    // ランダム・トポロジカル順の Solution
-    Solution* createRandomTopoSolution();
-
-
-    const std::vector<std::vector<int>>& getSuccessors() const { return instance.successors; }
-
-    void localSearchOnSchedObj(Solution *solution, int maxLSMoves);
-
-    void localSearchOnActivityOrder(Solution *solution, int maxLSMoves);
-
-    explicit RCPSP_Problem(const std::string &filename, int strategy = 1);
-    ~RCPSP_Problem() override = default;
+    // ============================================================
+    // [変更] コンストラクタに rr, rv を追加
+    //   rr : Resource Range  (0.0 / 0.25 / 0.5 / 0.75)
+    //   rv : Resource Vacation (false=なし / true=14日に1日休暇)
+    //
+    //   デフォルト値 rr=0.0, rv=false のため
+    //   既存の呼び出し new RCPSP_Problem(file) はそのまま動く
+    // ============================================================
+    explicit RCPSP_Problem(const std::string &filename,
+                            int    strategy = 4,
+                            double rr       = 0.0,
+                            bool   rv       = false);
 
     void evaluate(Solution *solution) override;
 
     void printInfo() const;
 
-    void setMaxEvaluations(int maxEval) { maxEvaluations_ = maxEval; }
-
-// === Cost series control (global, shared across instances) ===
-// If you want to regenerate costs when instance size changes, call this before running the next instance.
-static void resetGlobalCostSeries();
-
-// Optional: force writing current cost table to CSV (mainly for debugging / reproducibility)
-static bool writeGlobalCostSeriesCSV(const std::string &filename);
-
-
-    // ランダムに実行可能なジョブ順序（topological) を生成する
-    std::vector<int> random_topological_sort(const int seed) const {
-        int n = (int)instance.successors.size();
-        std::vector<int> indeg(n, 0);
-
-        // 入次数を計算
-        for (int u = 0; u < n; ++u) {
-            for (int v : instance.successors[u]) {
-                ++indeg[v];
-            }
-        }
-
-        // 入次数0のノードを収集
-        std::vector<int> zero;
-        zero.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            if (indeg[i] == 0) zero.push_back(i);
-        }
-
-        // 乱数
-        static std::mt19937 gen(seed);
-
-        std::vector<int> order;
-        order.reserve(n);
-
-        while (!zero.empty()) {
-            // zero からランダムに1つ選ぶ
-            std::uniform_int_distribution<int> dist(0, (int)zero.size() - 1);
-            int idx = dist(gen);
-            int u = zero[idx];
-
-            // 選んだ要素を末尾と交換してpop_backで削除（O(1)削除）
-            zero[idx] = zero.back();
-            zero.pop_back();
-
-            order.push_back(u);
-
-            // 後続ノードの入次数を1減らして、0になったらzeroに入れる
-            for (int v : instance.successors[u]) {
-                if (--indeg[v] == 0) {
-                    zero.push_back(v);
-                }
-            }
-        }
-
-        // DAGではない（サイクルあり）の場合
-        if ((int)order.size() != n) {
-            throw std::runtime_error("Graph is not a DAG (cycle detected).");
-        }
-
-        return order;
-    }
-
-    std::vector<std::vector<int>> get_precedence_matrix() const {
-        int n = (int)instance.successors.size();
-        std::vector<std::vector<int>> mat(n, std::vector<int>(n, 0));
-        for (int u = 0; u < n; ++u) {
-            for (int v : instance.successors[u]) {
-                mat[u][v] = 1;
-            }
-        }
-        return mat;
-    }
-
-private:
     bool checkTopological(const std::vector<int> &seq) const;
     bool checkTopological(Solution *solution) const;
 
-    int numberOfJobs_{0};
-    const RCPSP_Instance instance;
+    Solution* createRandomTopoSolution();
 
-    int strategy_{1};
-    int maxEvaluations_{0};
-    int evalCounter_{0};
+    void localSearchOnActivityOrder(Solution *solution, int maxLSMoves = -1);
+    void localSearchOnSchedObj     (Solution *solution, int maxLSMoves = -1);
+
+    void setMaxEvaluations(int me) { maxEvaluations_ = me; }
+
+    const std::vector<std::vector<int>>& getSuccessors() const {
+        return instance.successors;
+    }
+
+    // [追加] 時間依存容量テーブルを（再）生成する
+    //   コンストラクタが自動で呼ぶが、後から呼び直すことも可能
+    void buildTimeVaryingCapacity(double rr, bool rv);
+
+    static void resetGlobalCostSeries();
+    static bool writeGlobalCostSeriesCSV(const std::string &filename);
+
+protected:
+    RCPSP_Instance instance;
+
+private:
+    int strategy_       = 4;
+    int evalCounter_    = 0;
+    int maxEvaluations_ = 0;
+    int numberOfJobs_   = 0;
 };
 
-#endif
+#endif // RCPSP_PROBLEM_H
