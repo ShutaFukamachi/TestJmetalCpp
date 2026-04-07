@@ -827,6 +827,89 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
     return sol;
 }
 
+std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
+    int n    = numberOfJobs_;
+    int nRes = instance.nRes;
+
+    Variable **vars = solution->getDecisionVariables();
+    std::vector<int> seq(n);
+    for (int i = 0; i < n; ++i) seq[i] = (int)vars[i]->getValue();
+
+    std::vector<std::vector<int>> preds(n);
+    for (int j = 0; j < n; ++j)
+        for (int succ : instance.successors[j])
+            if (succ >= 0 && succ < n) preds[succ].push_back(j);
+
+    int T = 0;
+    for (int d : instance.duration) T += d;
+    if (!instance.capacity_t.empty() && !instance.capacity_t[0].empty()) {
+        int tvT = (int)instance.capacity_t[0].size();
+        if (tvT > T) T = tvT;
+    }
+    if (T <= 0) T = 1;
+
+    std::vector<std::vector<int>> usage(nRes, std::vector<int>(T, 0));
+    std::vector<int> start(n, 0), finish(n, 0);
+
+    auto canPlace = [&](int j, int t) {
+        int d = instance.duration[j];
+        if (d <= 0) return true;
+        if (t < 0 || t + d > T) return false;
+        for (int tau = t; tau < t + d; ++tau)
+            for (int k = 0; k < nRes; ++k)
+                if (usage[k][tau] + instance.demand[j][k] > capacityAt(instance, k, tau)) return false;
+        return true;
+    };
+
+    for (int pos = 0; pos < n; ++pos) {
+        int j = seq[pos];
+        int d = instance.duration[j];
+        if (d <= 0) { start[j] = finish[j] = 0; continue; }
+
+        int est = 0;
+        for (int p : preds[j]) est = std::max(est, finish[p]);
+
+        int t = est;
+        while (t < T && !canPlace(j, t)) ++t;
+        if (t >= T) t = std::max(0, T - d);
+
+        for (int tau = t; tau < t + d; ++tau)
+            for (int k = 0; k < nRes; ++k)
+                usage[k][tau] += instance.demand[j][k];
+        start[j]  = t;
+        finish[j] = t + d;
+    }
+    return start;
+}
+
+std::vector<std::vector<int>> RCPSP_Problem::get_precedence_matrix() const {
+    int n = numberOfJobs_;
+    // mat[i][j] = 1: ジョブiはジョブjより前に来なければならない（推移閉包）
+    std::vector<std::vector<int>> mat(n, std::vector<int>(n, 0));
+
+    // 直接の先行制約を設定
+    for (int i = 0; i < n; ++i) {
+        for (int succ : instance.successors[i]) {
+            if (succ >= 0 && succ < n) {
+                mat[i][succ] = 1;
+            }
+        }
+    }
+
+    // Warshallアルゴリズムで推移閉包を計算
+    for (int k = 0; k < n; ++k) {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (mat[i][k] && mat[k][j]) {
+                    mat[i][j] = 1;
+                }
+            }
+        }
+    }
+
+    return mat;
+}
+
 // ===== RCPSP_Problem: global cost series control =====
 void RCPSP_Problem::resetGlobalCostSeries() {
     resetCostSeriesInternal();

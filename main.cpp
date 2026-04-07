@@ -124,11 +124,62 @@ static void runNSGA(const string &instanceFile,
     SolutionSet *population = algorithm->execute();
 
     // --- 結果出力 ---
-    const string funPath = "FUN_" + tagPrefix + "_" + ctag;
-    const string varPath = "VAR_" + tagPrefix + "_" + ctag;
+    const string funPath  = "FUN_"  + tagPrefix + "_" + ctag;
+    const string varPath  = "VAR_"  + tagPrefix + "_" + ctag;
+    const string schedPath = "SCHED_" + tagPrefix + "_" + ctag;
 
     ofstream funFile(funPath.c_str());
     ofstream varFile(varPath.c_str());
+    ofstream schedFile(schedPath.c_str());
+
+    RCPSP_Problem *rcpsp = dynamic_cast<RCPSP_Problem*>(problem);
+    int nJobs = rcpsp ? rcpsp->getNumJobs() : 0;
+    int nRes  = rcpsp ? rcpsp->getNumResources() : 0;
+
+    // SCHEDヘッダー: nJobs nRes
+    schedFile << nJobs << " " << nRes << "\n";
+    // 各ジョブの処理時間
+    if (rcpsp) {
+        const auto &dur = rcpsp->getDurations();
+        for (int j = 0; j < nJobs; ++j) {
+            schedFile << dur[j];
+            if (j + 1 < nJobs) schedFile << " ";
+        }
+        schedFile << "\n";
+        // 各ジョブの資源需要量 (nJobs行 × nRes列)
+        const auto &demand = rcpsp->getDemand();
+        for (int j = 0; j < nJobs; ++j) {
+            for (int k = 0; k < nRes; ++k) {
+                schedFile << demand[j][k];
+                if (k + 1 < nRes) schedFile << " ";
+            }
+            schedFile << "\n";
+        }
+        // 定数容量 cap[0] ... cap[nRes-1]
+        const auto &cap = rcpsp->getCapacity();
+        for (int k = 0; k < nRes; ++k) {
+            schedFile << cap[k];
+            if (k + 1 < nRes) schedFile << " ";
+        }
+        schedFile << "\n";
+        // 時間依存容量 (T_cap=0 なら時間依存なし)
+        const auto &cap_t = rcpsp->getCapacityT();
+        if (cap_t.empty() || cap_t[0].empty()) {
+            schedFile << "0\n";
+        } else {
+            int T_cap = (int)cap_t[0].size();
+            schedFile << T_cap << "\n";
+            for (int k = 0; k < nRes; ++k) {
+                for (int t = 0; t < T_cap; ++t) {
+                    schedFile << cap_t[k][t];
+                    if (t + 1 < T_cap) schedFile << " ";
+                }
+                schedFile << "\n";
+            }
+        }
+    }
+    // 解の数
+    schedFile << population->size() << "\n";
 
     for (int i = 0; i < population->size(); ++i) {
         Solution *sol = population->get(i);
@@ -141,10 +192,19 @@ static void runNSGA(const string &instanceFile,
             if (j + 1 < nVar) varFile << " ";
         }
         varFile << "\n";
+
+        // SCHED: makespan cost start[0] start[1] ... start[nJobs-1]
+        schedFile << sol->getObjective(0) << " " << sol->getObjective(1);
+        if (rcpsp) {
+            vector<int> st = rcpsp->computeStartTimes(sol);
+            for (int j = 0; j < nJobs; ++j) schedFile << " " << st[j];
+        }
+        schedFile << "\n";
     }
 
     funFile.close();
     varFile.close();
+    schedFile.close();
 
     cout << "[DONE] " << funPath << "  (Pareto size=" << population->size() << ")\n\n";
 

@@ -42,6 +42,19 @@ public:
         return instance.successors;
     }
 
+    int getNumJobs()      const { return numberOfJobs_; }
+    int getNumResources() const { return instance.nRes; }
+    const std::vector<int>&              getDurations() const { return instance.duration; }
+    const std::vector<std::vector<int>>& getDemand()   const { return instance.demand; }
+    const std::vector<int>&              getCapacity()  const { return instance.capacity; }
+    const std::vector<std::vector<int>>& getCapacityT() const { return instance.capacity_t; }
+
+    // 各ジョブの開始時刻を返す（ESS: Earliest Start Schedule）
+    std::vector<int> computeStartTimes(Solution *solution) const;
+
+    // 先行制約の推移閉包行列: mat[i][j]==1 ならジョブiはジョブjより前に来なければならない
+    std::vector<std::vector<int>> get_precedence_matrix() const;
+
     // [追加] 時間依存容量テーブルを（再）生成する
     //   コンストラクタが自動で呼ぶが、後から呼び直すことも可能
     void buildTimeVaryingCapacity(double rr, bool rv);

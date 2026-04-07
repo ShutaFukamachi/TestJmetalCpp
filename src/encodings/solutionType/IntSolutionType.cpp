@@ -8,6 +8,9 @@
 
 #include <IntSolutionType.h>
 #include <cstddef>
+#include <random>
+#include <numeric>
+#include <algorithm>
 #include "RCPSP_Problem.h" // RCPSPの具体的な問題定義クラス
 
 /**
@@ -44,8 +47,40 @@ Variable **IntSolutionType::createVariables() {
         variables[i] = new Int(problem_->getLowerLimit(i), problem_->getUpperLimit(i));
     }
     // ランダムに実行可能なジョブ順序（topological sort) を生成して、最初の半分の変数に設定する
-    vector<int> seq = rcpspProblem->random_topological_sort(rand());
-    for (i = 0; i < problem_->getNumberOfVariables() / 2; i++) {
+    int nJobs = problem_->getNumberOfVariables() / 2;
+    const auto &successors = rcpspProblem->getSuccessors();
+
+    std::vector<int> indeg(nJobs, 0);
+    for (int j = 0; j < nJobs; ++j) {
+        for (int succ : successors[j]) {
+            if (succ >= 0 && succ < nJobs) ++indeg[succ];
+        }
+    }
+    std::vector<int> avail;
+    for (int j = 0; j < nJobs; ++j) {
+        if (indeg[j] == 0) avail.push_back(j);
+    }
+    std::mt19937 rng(std::random_device{}());
+    std::vector<int> seq;
+    seq.reserve(nJobs);
+    while (!avail.empty()) {
+        std::uniform_int_distribution<int> dist(0, (int)avail.size() - 1);
+        int idx = dist(rng);
+        int j = avail[idx];
+        avail[idx] = avail.back();
+        avail.pop_back();
+        seq.push_back(j);
+        for (int succ : successors[j]) {
+            if (succ >= 0 && succ < nJobs) {
+                if (--indeg[succ] == 0) avail.push_back(succ);
+            }
+        }
+    }
+    if ((int)seq.size() != nJobs) {
+        seq.resize(nJobs);
+        std::iota(seq.begin(), seq.end(), 0);
+    }
+    for (i = 0; i < nJobs; i++) {
         variables[i]->setValue(seq[i]);
     }
     return variables;
