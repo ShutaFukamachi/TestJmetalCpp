@@ -5,22 +5,15 @@
 #include <map>
 #include <iostream>
 #include <stdexcept>
+#include <cmath>
 
-#include "core/Problem.h"
-#include "core/Algorithm.h"
-#include "core/SolutionSet.h"
-#include "Solution.h"
-#include "Variable.h"
-#include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
-#include "operators/crossover/PermutationCrossover.h"
-#include "operators/mutation/PermutationMutation.h"
-#include "operators/selection/BinaryTournament2.h"
+#include "metaheuristics/branchAndBound/BranchAndBound.h"
 
 using namespace std;
 
 // ============================================================
-//  ユーティリティ
+//  ユーティリティ (main.cpp と同じ)
 // ============================================================
 
 static bool fileExists(const string &p) {
@@ -53,13 +46,7 @@ static string detectSizeTag(const string &path) {
     return "unknown";
 }
 
-// ============================================================
-//  RR/RV 条件タグ文字列
-//   例: rr=0.5, rv=true  → "RR050_RV1"
-//       rr=0.0, rv=false → "RR000_RV0"
-// ============================================================
 static string conditionTag(double rr, bool rv) {
-    // rr を 3 桁整数で表す (0.25 → "025")
     int rrInt = static_cast<int>(std::round(rr * 100));
     char buf[32];
     snprintf(buf, sizeof(buf), "RR%03d_RV%d", rrInt, rv ? 1 : 0);
@@ -67,138 +54,97 @@ static string conditionTag(double rr, bool rv) {
 }
 
 // ============================================================
-//  1インスタンス × 1条件 (rr, rv) の NSGA-II 実行
+//  1インスタンス × 1条件 (rr, rv) の BnB 実行
 //
 //  出力ファイル:
-//    FUN_<instanceId>_<condTag>  : パレートフロント (makespan cost)
-//    VAR_<instanceId>_<condTag>  : 決定変数
+//    FUN_tree_<instanceId>_<condTag>   : パレートフロント (makespan cost)
+//    VAR_tree_<instanceId>_<condTag>   : 開始時刻列
+//    SCHED_tree_<instanceId>_<condTag> : スケジュール詳細
 // ============================================================
-static void runNSGA(const string &instanceFile,
-                    const string &tagPrefix,
-                    double rr,
-                    bool   rv)
+static void runBnB(const string &instanceFile,
+                   const string &tagPrefix,
+                   double rr,
+                   bool   rv)
 {
     const string ctag = conditionTag(rr, rv);
 
     cout << "============================================\n";
-    cout << "[RUN] " << tagPrefix << "  " << ctag << "\n";
+    cout << "[BnB] " << tagPrefix << "  " << ctag << "\n";
     cout << "  instance : " << instanceFile << "\n";
     cout << "  RR=" << rr << "  RV=" << (rv ? 1 : 0) << "\n";
     cout << "============================================\n";
 
-    // --- 問題インスタンス生成 (rr, rv を渡す) ---
-    Problem *problem = new RCPSP_Problem(instanceFile, /*strategy=*/4, rr, rv);
-    Algorithm *algorithm = new NSGAII(problem);
+    RCPSP_Problem *problem = new RCPSP_Problem(instanceFile, /*strategy=*/4, rr, rv);
 
-    int populationSize = 100;
-    int maxEvaluations = 20000;
+    BranchAndBound bnb(problem);
+    vector<BnBSolution> front = bnb.solveEpsilonConstraint(12);
 
-    if (auto *rcpsp = dynamic_cast<RCPSP_Problem*>(problem)) {
-        rcpsp->setMaxEvaluations(maxEvaluations);
-    }
+    // ── 出力ファイル ──────────────────────────────────────
+    const string funPath   = "FUN_tree_"   + tagPrefix + "_" + ctag;
+    const string varPath   = "VAR_tree_"   + tagPrefix + "_" + ctag;
+    const string schedPath = "SCHED_tree_" + tagPrefix + "_" + ctag;
 
-    algorithm->setInputParameter("populationSize", &populationSize);
-    algorithm->setInputParameter("maxEvaluations", &maxEvaluations);
-
-    // 局所探索: OFF
-    int lsFlag = 0;
-    algorithm->setInputParameter("useLocalSearch", &lsFlag);
-
-    // 初期解の seed: 渡さない (NSGA-II がランダム生成)
-
-    // --- 演算子設定 ---
-    double crossoverProbability = 0.9;
-    Operator *crossover = new PermutationCrossover(crossoverProbability);
-
-    double mutationProbability = 1.0 / (double)problem->getNumberOfVariables();
-    Operator *mutation  = new PermutationMutation(mutationProbability, problem);
-
-    map<string, void*> selParams;
-    Operator *selection = new BinaryTournament2(selParams);
-
-    algorithm->addOperator("crossover", crossover);
-    algorithm->addOperator("mutation",  mutation);
-    algorithm->addOperator("selection", selection);
-
-    // --- 実行 ---
-    SolutionSet *population = algorithm->execute();
-
-    // --- 結果出力 ---
-    const string funPath  = "FUN_"  + tagPrefix + "_" + ctag;
-    const string varPath  = "VAR_"  + tagPrefix + "_" + ctag;
-    const string schedPath = "SCHED_" + tagPrefix + "_" + ctag;
-
-    ofstream funFile(funPath.c_str());
-    ofstream varFile(varPath.c_str());
+    ofstream funFile  (funPath.c_str());
+    ofstream varFile  (varPath.c_str());
     ofstream schedFile(schedPath.c_str());
 
-    RCPSP_Problem *rcpsp = dynamic_cast<RCPSP_Problem*>(problem);
-    int nJobs = rcpsp ? rcpsp->getNumJobs() : 0;
-    int nRes  = rcpsp ? rcpsp->getNumResources() : 0;
+    int nJobs = problem->getNumJobs();
+    int nRes  = problem->getNumResources();
 
-    // SCHEDヘッダー: nJobs nRes
+    // SCHED ヘッダー (NSGA-II と同形式)
     schedFile << nJobs << " " << nRes << "\n";
-    // 各ジョブの処理時間
-    if (rcpsp) {
-        const auto &dur = rcpsp->getDurations();
-        for (int j = 0; j < nJobs; ++j) {
-            schedFile << dur[j];
-            if (j + 1 < nJobs) schedFile << " ";
-        }
-        schedFile << "\n";
-        // 各ジョブの資源需要量 (nJobs行 × nRes列)
-        const auto &demand = rcpsp->getDemand();
-        for (int j = 0; j < nJobs; ++j) {
-            for (int k = 0; k < nRes; ++k) {
-                schedFile << demand[j][k];
-                if (k + 1 < nRes) schedFile << " ";
-            }
-            schedFile << "\n";
-        }
-        // 定数容量 cap[0] ... cap[nRes-1]
-        const auto &cap = rcpsp->getCapacity();
+    const auto &dur    = problem->getDurations();
+    const auto &demand = problem->getDemand();
+    const auto &cap    = problem->getCapacity();
+    const auto &cap_t  = problem->getCapacityT();
+
+    for (int j = 0; j < nJobs; ++j) {
+        schedFile << dur[j];
+        if (j + 1 < nJobs) schedFile << " ";
+    }
+    schedFile << "\n";
+    for (int j = 0; j < nJobs; ++j) {
         for (int k = 0; k < nRes; ++k) {
-            schedFile << cap[k];
+            schedFile << demand[j][k];
             if (k + 1 < nRes) schedFile << " ";
         }
         schedFile << "\n";
-        // 時間依存容量 (T_cap=0 なら時間依存なし)
-        const auto &cap_t = rcpsp->getCapacityT();
-        if (cap_t.empty() || cap_t[0].empty()) {
-            schedFile << "0\n";
-        } else {
-            int T_cap = (int)cap_t[0].size();
-            schedFile << T_cap << "\n";
-            for (int k = 0; k < nRes; ++k) {
-                for (int t = 0; t < T_cap; ++t) {
-                    schedFile << cap_t[k][t];
-                    if (t + 1 < T_cap) schedFile << " ";
-                }
-                schedFile << "\n";
+    }
+    for (int k = 0; k < nRes; ++k) {
+        schedFile << cap[k];
+        if (k + 1 < nRes) schedFile << " ";
+    }
+    schedFile << "\n";
+    if (cap_t.empty() || cap_t[0].empty()) {
+        schedFile << "0\n";
+    } else {
+        int T_cap = (int)cap_t[0].size();
+        schedFile << T_cap << "\n";
+        for (int k = 0; k < nRes; ++k) {
+            for (int t = 0; t < T_cap; ++t) {
+                schedFile << cap_t[k][t];
+                if (t + 1 < T_cap) schedFile << " ";
             }
+            schedFile << "\n";
         }
     }
-    // 解の数
-    schedFile << population->size() << "\n";
+    schedFile << front.size() << "\n";
 
-    for (int i = 0; i < population->size(); ++i) {
-        Solution *sol = population->get(i);
-        funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
+    // 各解を出力
+    for (const BnBSolution &sol : front) {
+        // FUN: makespan cost
+        funFile << sol.makespan << " " << sol.cost << "\n";
 
-        int nVar = problem->getNumberOfVariables();
-        Variable **vars = sol->getDecisionVariables();
-        for (int j = 0; j < nVar; ++j) {
-            varFile << vars[j]->getValue();
-            if (j + 1 < nVar) varFile << " ";
+        // VAR: 開始時刻列 (start[0] start[1] ... start[nJobs-1])
+        for (int j = 0; j < nJobs; ++j) {
+            varFile << sol.startTime[j];
+            if (j + 1 < nJobs) varFile << " ";
         }
         varFile << "\n";
 
-        // SCHED: makespan cost start[0] start[1] ... start[nJobs-1]
-        schedFile << sol->getObjective(0) << " " << sol->getObjective(1);
-        if (rcpsp) {
-            vector<int> st = rcpsp->computeStartTimes(sol);
-            for (int j = 0; j < nJobs; ++j) schedFile << " " << st[j];
-        }
+        // SCHED: makespan cost start[0] ... start[nJobs-1]
+        schedFile << sol.makespan << " " << sol.cost;
+        for (int j = 0; j < nJobs; ++j) schedFile << " " << sol.startTime[j];
         schedFile << "\n";
     }
 
@@ -206,15 +152,14 @@ static void runNSGA(const string &instanceFile,
     varFile.close();
     schedFile.close();
 
-    cout << "[DONE] " << funPath << "  (Pareto size=" << population->size() << ")\n\n";
+    cout << "[DONE] " << funPath
+         << "  (Pareto size=" << front.size() << ")\n\n";
 
-    delete population;
-    delete algorithm;
     delete problem;
 }
 
 // ============================================================
-//  1インスタンスに対して 8 通りの RR/RV 条件を全部実行
+//  1インスタンスに対して 8通りの RR/RV 条件を全部実行
 // ============================================================
 static void runAllConditions(const string &instanceFile) {
     const string prefix  = baseNameNoExt(instanceFile);
@@ -224,9 +169,7 @@ static void runAllConditions(const string &instanceFile) {
         throw runtime_error("Cannot detect sizeTag from path: " + instanceFile);
     }
 
-    // --- コストファイルの準備 ---
-    // インスタンスごとの costs_<id>.csv を costs.csv にコピーする
-    // costs_<id>.csv がなければ、RCPSP_Problem が自動生成して costs.csv に保存する
+    // コストファイルの準備
     const string costsFile = "costs_" + prefix + ".csv";
     if (fileExists(costsFile)) {
         copyFileBinary(costsFile, "costs.csv");
@@ -241,27 +184,20 @@ static void runAllConditions(const string &instanceFile) {
     cout << " Instance: " << prefix << " (" << sizeTag << ")\n";
     cout << "========================================\n";
 
-    // ============================================================
-    //  論文 Table 5 の RR/RV 条件 8 通り
-    //    RR = 0.0, 0.25, 0.5, 0.75
-    //    RV = false (0), true (1)
-    // ============================================================
     struct Cond { double rr; bool rv; };
     const vector<Cond> conditions = {
-        {0.00, false},  // RR=0,    RV=0
-        {0.00, true },  // RR=0,    RV=1
-        {0.25, false},  // RR=0.25, RV=0
-        {0.25, true },  // RR=0.25, RV=1
-        {0.50, false},  // RR=0.5,  RV=0
-        {0.50, true },  // RR=0.5,  RV=1
-        {0.75, false},  // RR=0.75, RV=0
-        {0.75, true },  // RR=0.75, RV=1
+        {0.00, false},
+        {0.00, true },
+        {0.25, false},
+        {0.25, true },
+        {0.50, false},
+        {0.50, true },
+        {0.75, false},
+        {0.75, true },
     };
 
     for (const auto &c : conditions) {
-        // コストテーブルは同一インスタンス内で再利用する
-        // (RCPSP_Problem のコンストラクタが capacity_t だけ新たに作る)
-        runNSGA(instanceFile, prefix, c.rr, c.rv);
+        runBnB(instanceFile, prefix, c.rr, c.rv);
     }
 
     cout << "[BATCH] Instance " << prefix << " all conditions done.\n\n";
@@ -272,18 +208,15 @@ static void runAllConditions(const string &instanceFile) {
 // ============================================================
 int main(int argc, char **argv) {
     try {
-        // コマンドライン引数でインスタンスを1つ指定した場合
         if (argc >= 2) {
             runAllConditions(argv[1]);
             return 0;
         }
 
-        // ---- バッチ実行: 対象インスタンスをここに列挙 ----
+        // ---- バッチ実行: j30 インスタンスのみ ----
         const vector<string> instances = {
             "j30.sm/j301_1.sm",
             "j30.sm/j302_1.sm",
-            "j60.sm/j601_1.sm",
-            // 必要に応じてコメントアウトを外す
         };
 
         for (const auto &inst : instances) {
@@ -298,12 +231,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-
-
-
-
-
-
 
 
 

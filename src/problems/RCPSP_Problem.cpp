@@ -217,6 +217,21 @@ static double resourceCost(int k, int t, int horizon) {
     return COST_TABLE[k][t];
 }
 
+// ============================================================
+// BnB 用公開アクセサ: job j を時刻 t に配置したときのコスト
+// ============================================================
+double RCPSP_Problem::computeJobCostAt(int j, int t, int horizon) const {
+    int d = instance.duration[j];
+    if (d <= 0) return 0.0;
+    double c = 0.0;
+    for (int tau = t; tau < t + d; ++tau) {
+        for (int k = 0; k < instance.nRes; ++k) {
+            c += resourceCost(k, tau, horizon) * (double)instance.demand[j][k];
+        }
+    }
+    return c;
+}
+
 // ==== maxShift =====
 static void buildMaxShiftVector(
         int strategy, int T, int nJobs,
@@ -591,6 +606,10 @@ void RCPSP_Problem::evaluate(Solution *solution) {
         std::exit(1);
     }
 
+    // コストシフト後の実際の開始時刻をキャッシュしておく
+    // → computeStartTimes() がガントチャート用に正確な開始時刻を返せるようにする
+    startTimesCache_[solution] = start;
+
     solution->setObjective(0, (double) makespan);
     solution->setObjective(1, totalCost);
 }
@@ -828,6 +847,13 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
 }
 
 std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
+    // evaluate() でキャッシュされた実際の開始時刻（コストシフト済み）があれば返す
+    auto it = startTimesCache_.find(solution);
+    if (it != startTimesCache_.end()) {
+        return it->second;
+    }
+
+    // キャッシュがない場合は従来の最早開始スケジュール（ESS）で計算
     int n    = numberOfJobs_;
     int nRes = instance.nRes;
 

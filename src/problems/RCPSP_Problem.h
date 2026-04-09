@@ -6,6 +6,7 @@
 #include "Solution.h"
 #include "IntSolutionType.h"
 #include "RCPSP_Reader.h"
+#include <map>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,9 @@ public:
     //   コンストラクタが自動で呼ぶが、後から呼び直すことも可能
     void buildTimeVaryingCapacity(double rr, bool rv);
 
+    // BnB 用: ジョブ j を時刻 t に配置したときのコストを返す
+    double computeJobCostAt(int j, int t, int horizon) const;
+
     static void resetGlobalCostSeries();
     static bool writeGlobalCostSeriesCSV(const std::string &filename);
 
@@ -70,6 +74,10 @@ private:
     int evalCounter_    = 0;
     int maxEvaluations_ = 0;
     int numberOfJobs_   = 0;
+
+    // evaluate() で確定した実際の開始時刻をキャッシュする
+    // computeStartTimes() はこれを優先して返す
+    mutable std::map<Solution*, std::vector<int>> startTimesCache_;
 };
 
 #endif // RCPSP_PROBLEM_H

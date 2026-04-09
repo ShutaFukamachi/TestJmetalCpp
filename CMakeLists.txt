@@ -55,11 +55,33 @@ target_include_directories(jmetalcpp PUBLIC
 add_executable(TestJmetalCpp main.cpp
 )
 
+add_executable(BnBJmetalCpp main_BnB_RCPSP_with_TimeWindow_ResourceChange.cpp
+)
+
+add_executable(NSGAJmetalCpp main_NSGAII_RCPSP_with_TimeWindow_ResourceChange.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
         jmetalcpp
 
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(BnBJmetalCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(NSGAJmetalCpp PRIVATE
+        jmetalcpp
 
         gurobi130
         $<$<CONFIG:Debug>:gurobi_c++mdd2017>
