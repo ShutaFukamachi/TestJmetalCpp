@@ -3,80 +3,32 @@
 #include <random>
 #include <vector>
 
-
-static void repairToPermutation(std::vector<int> &p, int nJobs) {
-    std::vector<int> count(nJobs, 0);
-
-
-    for (int i = 0; i < nJobs; ++i) {
-        int v = p[i];
-        if (v < 0 || v >= nJobs) {
-            p[i] = -1;
-        } else {
-            count[v]++;
-        }
-    }
-
-
-    std::vector<int> missing;
-    missing.reserve(nJobs);
-    for (int j = 0; j < nJobs; ++j) {
-        if (count[j] == 0) {
-            missing.push_back(j);
-        }
-    }
-
-    int missIdx = 0;
-
-
-    for (int i = 0; i < nJobs; ++i) {
-        int v = p[i];
-        if (v == -1) {
-
-            p[i] = missing[missIdx++];
-        } else if (count[v] > 1) {
-
-            count[v]--;
-            p[i] = missing[missIdx++];
-        }
-    }
-
-
-    int pos0 = -1, posLast = -1;
-    for (int i = 0; i < nJobs; ++i) {
-        if (p[i] == 0)        pos0   = i;
-        if (p[i] == nJobs-1)  posLast = i;
-    }
-    if (pos0 != -1 && pos0 != 0) {
-        std::swap(p[0], p[pos0]);
-    }
-    if (posLast != -1 && posLast != nJobs-1) {
-        std::swap(p[nJobs-1], p[posLast]);
-    }
-}
-
-
-//PermutationCrossover::PermutationCrossover(double p) : probability(p) {}
+// ============================================================
+// Hartmann (1998) の 2点交叉
+//
+// 活動リスト部分:
+//   k1, k2 を乱数で決め 3 ブロックに分割
+//   子1: [Mother の前ブロック] + [Father の未使用を Father の順で] + [Mother の未使用を Mother の順で]
+//   子2: 親の役割を入れ替えて同様
+//
+// schedObj 部分:
+//   各ジョブを「どちらの親から貢献されたか」に応じて、
+//   そのジョブに対応する親の schedObj を継承する
+//   （schedObj は vars[nJobs + job_id] でジョブ ID 単位に格納）
+// ============================================================
 
 void * PermutationCrossover::execute(void * object) {
     void ** parents = (void **)object;
-    Solution * p1 = (Solution *)parents[0];
-    Solution * p2 = (Solution *)parents[1];
+    Solution * p1 = (Solution *)parents[0];  // Mother
+    Solution * p2 = (Solution *)parents[1];  // Father
 
     const int nVars = p1->getNumberOfVariables();
-    const int nJobs = nVars / 2;  // 前半: ALR, 後半: schedObj
-
-//    if (nJobs <= 3) {
-//        Solution **offs = new Solution*[2];
-//        offs[0] = new Solution(*p1);
-//        offs[1] = new Solution(*p2);
-//        return (void*)offs;
-//    }
+    const int nJobs = nVars / 2;  // 前半: 活動リスト, 後半: schedObj
 
     static thread_local std::mt19937 gen{std::random_device{}()};
     std::uniform_real_distribution<> prob01(0.0, 1.0);
 
-    // crossoverしない
+    // 交叉しない場合は複製して返す
     if (prob01(gen) > probability) {
         Solution **offs = new Solution*[2];
         offs[0] = new Solution(*p1);
@@ -87,142 +39,93 @@ void * PermutationCrossover::execute(void * object) {
     Variable **v1 = p1->getDecisionVariables();
     Variable **v2 = p2->getDecisionVariables();
 
-
-    std::vector<int> a(nVars), b(nVars);
-    for (int i = 0; i < nVars; ++i) {
-        a[i] = v1[i]->getValue();
-        b[i] = v2[i]->getValue();
+    // 活動リストと schedObj を配列に展開
+    std::vector<int> mother(nJobs), father(nJobs);
+    std::vector<int> mSched(nJobs), fSched(nJobs);
+    for (int i = 0; i < nJobs; ++i) {
+        mother[i] = (int)v1[i]->getValue();
+        father[i] = (int)v2[i]->getValue();
+    }
+    for (int j = 0; j < nJobs; ++j) {
+        mSched[j] = (int)v1[nJobs + j]->getValue();  // job j の schedObj (Mother)
+        fSched[j] = (int)v2[nJobs + j]->getValue();  // job j の schedObj (Father)
     }
 
-    repairToPermutation(a, nJobs);
-    repairToPermutation(b, nJobs);
+    // 交叉点を 2 つ決める（ダミー端点を除いた範囲: 1..nJobs-1）
+    std::uniform_int_distribution<> dis(1, nJobs - 1);
+    int k1 = dis(gen), k2 = dis(gen);
+    while (k1 == k2) k2 = dis(gen);
+    if (k1 > k2) std::swap(k1, k2);
+    // ブロック: [0, k1), [k1, k2), [k2, nJobs)
 
-    std::uniform_int_distribution<> dis(1, nJobs - 2);
-    int c1 = dis(gen), c2 = dis(gen);
-    while (c1 == c2) c2 = dis(gen);
-    if (c1 > c2) std::swap(c1, c2);
-
-
-    auto ox_make = [&](const std::vector<int>& P, const std::vector<int>& Q) {
-        std::vector<int> child(nVars, -1);
+    // make_child: (前ブロック親, 中ブロック親, 後ブロック親) から子を生成
+    //   活動リスト: 前ブロックを front_p からそのままコピー
+    //              中ブロックを mid_p の未使用ジョブで埋める
+    //              後ブロックを rear_p の未使用ジョブで埋める
+    //   schedObj:  ジョブを提供した親の schedObj を継承
+    //
+    //   返り値: (活動リスト, schedObj) ペア
+    auto make_child = [&](
+        const std::vector<int>& front_p, const std::vector<int>& front_s,
+        const std::vector<int>& mid_p,   const std::vector<int>& mid_s,
+        const std::vector<int>& rear_p,  const std::vector<int>& rear_s)
+    {
+        std::vector<int> child_al(nJobs, -1);
+        std::vector<int> child_so(nJobs, 0);
         std::vector<bool> used(nJobs, false);
 
-        // 0からc1-1までをPからコピー
-        for (int i = 0; i < c1; ++i) {
-            child[i] = P[i];
-            child[i + nJobs] = P[i + nJobs];
-            used[P[i]] = true;
-        }
-        // c1からc2-1までをQからコピー(重複しないように)
-        int j = 0;
-        for (int i = c1; i < c2; ++i) {
-            while (used[Q[j]]) ++j;
-            child[i] = Q[j];
-            child[i + nJobs] = Q[j + nJobs];
-            used[Q[j]] = true;
-            ++j;
-        }
-        // c2から最後までをPからコピー(重複しないように)
-        j = c1;
-        for (int i = c2; i < nJobs; ++i) {
-            while (used[P[j]]) ++j;
-            child[i] = P[j];
-            child[i + nJobs] = P[j + nJobs];
-            used[P[j]] = true;
-            ++j;
+        // ---- 前ブロック: front_p の [0, k1) をそのままコピー ----
+        for (int i = 0; i < k1; ++i) {
+            int job = front_p[i];
+            child_al[i] = job;
+            child_so[job] = front_s[job];  // job の schedObj は front 親から継承
+            used[job] = true;
         }
 
-//        std::copy(P.begin() + c1, P.begin() + c2 + 1, child.begin() + c1);
-//
-//
-//        for (int i = 0; i < nJobs; ++i) {
-//            int v = child[i];
-//            if (v >= 0 && v < nJobs) used[v] = true;
-//        }
-//
-//        int posStart = (c2 + 1) % nJobs;
-//        int pos = posStart;
-//
-//        for (int k = 0; k < nJobs; ++k) {
-//            int q = Q[(c2 + 1 + k) % nJobs];
-//            if (q == 0 || q == nJobs - 1) continue;
-//            if (q < 0 || q >= nJobs) continue;
-//            if (used[q]) continue;
-//
-//
-//            int steps = 0;
-//            while ((child[pos] != -1 || pos == 0 || pos == nJobs - 1) &&
-//                   steps < nJobs) {
-//                pos = (pos + 1) % nJobs;
-//                ++steps;
-//            }
-//            if (steps >= nJobs) {
-//
-//                break;
-//            }
-//            child[pos] = q;
-//            used[q] = true;
-//        }
-//
-//
-//        std::vector<int> remaining;
-//        for (int j = 0; j < nJobs; ++j) {
-//            if (!used[j]) remaining.push_back(j);
-//        }
-//        int idxRem = 0;
-//        for (int i = 0; i < nJobs; ++i) {
-//            if (child[i] == -1) {
-//                if (idxRem < (int)remaining.size()) {
-//                    child[i] = remaining[idxRem++];
-//                } else {
-//                    child[i] = 0; // 念のため
-//                }
-//            }
-//        }
-//
-//
-//        int pos0 = -1, posLast = -1;
-//        for (int i = 0; i < nJobs; ++i) {
-//            if (child[i] == 0)        pos0   = i;
-//            if (child[i] == nJobs-1)  posLast = i;
-//        }
-//        if (pos0 != -1 && pos0 != 0) {
-//            std::swap(child[0], child[pos0]);
-//        }
-//        if (posLast != -1 && posLast != nJobs-1) {
-//            std::swap(child[nJobs-1], child[posLast]);
-//        }
+        // ---- 中ブロック: mid_p の未使用ジョブを順に (k2-k1) 個 ----
+        int pos = k1;
+        for (int i = 0; i < nJobs && pos < k2; ++i) {
+            int job = mid_p[i];
+            if (!used[job]) {
+                child_al[pos] = job;
+                child_so[job] = mid_s[job];  // job の schedObj は mid 親から継承
+                used[job] = true;
+                ++pos;
+            }
+        }
 
-        return child;
+        // ---- 後ブロック: rear_p の未使用ジョブを順に (nJobs-k2) 個 ----
+        pos = k2;
+        for (int i = 0; i < nJobs && pos < nJobs; ++i) {
+            int job = rear_p[i];
+            if (!used[job]) {
+                child_al[pos] = job;
+                child_so[job] = rear_s[job];  // job の schedObj は rear 親から継承
+                used[job] = true;
+                ++pos;
+            }
+        }
+
+        return std::make_pair(child_al, child_so);
     };
 
-    auto cA = ox_make(a, b);
-    auto cB = ox_make(b, a);
-
+    // 子1 (Daughter): 前=Mother, 中=Father, 後=Mother
+    auto [alA, soA] = make_child(mother, mSched, father, fSched, mother, mSched);
+    // 子2 (Son):      前=Father, 中=Mother, 後=Father
+    auto [alB, soB] = make_child(father, fSched, mother, mSched, father, fSched);
 
     Solution **offspring = new Solution*[2];
     offspring[0] = new Solution(*p1);
     offspring[1] = new Solution(*p2);
 
-
-    for (int i = 0; i < nVars; ++i) {
-        offspring[0]->getDecisionVariables()[i]->setValue(cA[i]);
-        offspring[1]->getDecisionVariables()[i]->setValue(cB[i]);
+    for (int i = 0; i < nJobs; ++i) {
+        offspring[0]->getDecisionVariables()[i]->setValue(alA[i]);
+        offspring[1]->getDecisionVariables()[i]->setValue(alB[i]);
     }
-    // ↓ ox_makeで同時に行うようにしたので不要
-//
-//    std::bernoulli_distribution coin(0.5);
-//    for (int j = 0; j < nJobs; ++j) {
-//        int idx  = nJobs + j;
-//        int bit1 = v1[idx]->getValue();
-//        int bit2 = v2[idx]->getValue();
-//        offspring[0]->getDecisionVariables()[idx]->setValue(coin(gen) ? bit1 : bit2);
-//        offspring[1]->getDecisionVariables()[idx]->setValue(coin(gen) ? bit1 : bit2);
-//    }
+    for (int j = 0; j < nJobs; ++j) {
+        offspring[0]->getDecisionVariables()[nJobs + j]->setValue(soA[j]);
+        offspring[1]->getDecisionVariables()[nJobs + j]->setValue(soB[j]);
+    }
 
     return (void*)offspring;
 }
-
-
-
-

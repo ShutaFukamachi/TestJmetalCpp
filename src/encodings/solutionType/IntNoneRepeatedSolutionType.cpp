@@ -4,6 +4,7 @@
 #include <numeric>
 #include <vector>
 #include <iostream>
+#include <random>
 
 IntNoneRepeatedSolutionType::IntNoneRepeatedSolutionType(Problem *problem)
     : SolutionType(problem) {}
@@ -26,8 +27,9 @@ Variable **IntNoneRepeatedSolutionType::createVariables() {
     std::iota(values.begin(), values.end(), 0);
 
     // --- シャッフルしてランダム順列を生成 ---
-    std::random_shuffle(values.begin(), values.end());
-
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(values.begin(), values.end(), g);
     // --- 各位置に値を設定 ---
     for (int i = 0; i < n; i++) {
         double lower = problem_->getLowerLimit(i);

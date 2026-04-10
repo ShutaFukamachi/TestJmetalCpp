@@ -66,6 +66,11 @@ public:
     static void resetGlobalCostSeries();
     static bool writeGlobalCostSeriesCSV(const std::string &filename);
 
+    // 戦略切り替え・カウンタリセット（4戦略独立実行用）
+    void setStrategy(int s)      { strategy_    = s; }
+    void resetEvalCounter()      { evalCounter_ = 0; }
+    void clearStartTimesCache()  { startTimesCache_.clear(); }
+
 protected:
     RCPSP_Instance instance;
 

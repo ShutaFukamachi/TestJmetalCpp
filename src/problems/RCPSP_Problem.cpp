@@ -12,6 +12,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <queue>
 
 static std::mt19937 rng(12345);
 
@@ -29,6 +30,46 @@ static int capacityAt(const RCPSP_Instance &inst, int k, int t) {
         return inst.capacity_t[k][t];
     }
     return inst.capacity[k];
+}
+
+// ============================================================
+// repairToTopological: 先行制約を破った活動リストを修復する
+//   入力 seq の位置を優先度として Kahn のアルゴリズムを実行し、
+//   先行制約を満たしつつ元の順序をできるだけ保った ALR を返す
+// ============================================================
+static std::vector<int> repairToTopological(
+    const std::vector<int>& seq,
+    const std::vector<std::vector<int>>& successors,
+    int nJobs)
+{
+    std::vector<int> indeg(nJobs, 0);
+    for (int j = 0; j < nJobs; ++j)
+        for (int s : successors[j])
+            if (s >= 0 && s < nJobs) ++indeg[s];
+
+    // seq の位置を優先度にする（小さい = 優先）
+    std::vector<int> priority(nJobs, nJobs);
+    for (int i = 0; i < nJobs; ++i)
+        if (seq[i] >= 0 && seq[i] < nJobs)
+            priority[seq[i]] = i;
+
+    auto cmp = [&](int a, int b) { return priority[a] > priority[b]; };
+    std::priority_queue<int, std::vector<int>, decltype(cmp)> pq(cmp);
+
+    for (int j = 0; j < nJobs; ++j)
+        if (indeg[j] == 0) pq.push(j);
+
+    std::vector<int> result;
+    result.reserve(nJobs);
+    while (!pq.empty()) {
+        int j = pq.top(); pq.pop();
+        result.push_back(j);
+        for (int s : successors[j])
+            if (s >= 0 && s < nJobs && --indeg[s] == 0) pq.push(s);
+    }
+    // サイクルがある場合（通常は起きない）は元の seq をそのまま返す
+    if ((int)result.size() != nJobs) return seq;
+    return result;
 }
 
 // ============================================================
@@ -437,10 +478,10 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     }
 
     if (!checkTopological(seq)) {
-        std::cerr << "[RCPSP_Problem::evaluate] Infeasible topological order detected!" << std::endl;
-        solution->setObjective(0, 1e9);
-        solution->setObjective(1, 1e9);
-        return;
+        // ペナルティではなく先行制約を保った順序に修復する
+        seq = repairToTopological(seq, instance.successors, n);
+        // 修復済みシーケンスを変数に書き戻す
+        for (int i = 0; i < n; ++i) vars[i]->setValue((double)seq[i]);
     }
 
     std::vector<int> schedObj(n, 0);
@@ -836,11 +877,15 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
     }
 
     for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)perm[i]);
+
+    // schedObj を 50% 確率でランダム割り当て（フェーズ2の仕様通り）
+    std::bernoulli_distribution coin(0.5);
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
-        if (idx < nVars) vars[idx]->setValue(0.0);
+        if (idx < nVars) vars[idx]->setValue(coin(rng) ? 1.0 : 0.0);
     }
-    if (nJobs > 0 && nJobs < nVars)   vars[nJobs + 0]->setValue(0.0);
+    // ダミー端点は常に 0（makespan 優先）
+    if (nJobs > 0 && nJobs < nVars)              vars[nJobs + 0]->setValue(0.0);
     if (nJobs > 1 && nJobs + nJobs - 1 < nVars) vars[nJobs + nJobs - 1]->setValue(0.0);
 
     return sol;
