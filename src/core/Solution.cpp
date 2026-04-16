@@ -143,6 +143,7 @@ Solution::Solution (Solution *solution) {
   marked_ = solution->isMarked();
   rank_ = solution->getRank();
   location_ = solution->getLocation();
+  startTimes_ = solution->startTimes_;
 
   // create the variables
   //old fashion of copying variables

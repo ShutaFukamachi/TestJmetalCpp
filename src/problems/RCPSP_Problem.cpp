@@ -379,7 +379,10 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv) {
     // RV あり の場合は休暇日の分だけ余裕を大きくする
     int T = 0;
     for (int d : instance.duration) T += d;
-    T = static_cast<int>(T * (rv ? 2.0 : 1.5)) + 10;
+    // RV=1（休暇あり）は14日に1日休暇 ≈ 7%の追加余裕が必要。
+    // RR=0.75 では容量が最大25%になるため更に多くのタイムスロットが必要。
+    double factor = rv ? 3.5 : (rr >= 0.75 ? 2.5 : 1.5);
+    T = static_cast<int>(T * factor) + 20;
     if (T <= 0) T = 100;
 
     // 毎回異なる乱数列を使う
@@ -402,7 +405,7 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv) {
                 if (lo < 0.0) lo = 0.0;  // 負にならないようガード
                 std::uniform_real_distribution<> dist(lo, hi);
                 cap = static_cast<int>(std::round(dist(capRng)));
-                if (cap < 0) cap = 0;
+                if (cap < 1) cap = 1;  // 休暇日以外は最低1を保証
             }
             instance.capacity_t[k][t] = cap;
         }
@@ -513,8 +516,17 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     if (T <= 0) T = 1;
 
     // maxShift の設定
+    // outputMaxShift_ >= 0 のとき（出力用再評価）は固定値を使う（決定論的）
+    //   0   → ESS（schedObj=1 ジョブも最早時刻に配置）
+    //   N>0 → schedObj=1 ジョブを [t_mak, t_mak+N] の最安時刻に配置
     std::vector<int> maxShift;
-    buildMaxShiftVector(strategy_, T, n, evalCounter_, maxEvaluations_, maxShift);
+    if (outputMaxShift_ >= 0) {
+        maxShift.assign(n, outputMaxShift_);
+        if (n > 0) maxShift[0]     = 0;
+        if (n > 1) maxShift[n - 1] = 0;
+    } else {
+        buildMaxShiftVector(strategy_, T, n, evalCounter_, maxEvaluations_, maxShift);
+    }
 
     std::vector<std::vector<int>> preds(n);
     for (int j = 0; j < n; ++j) {
@@ -650,6 +662,8 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     // コストシフト後の実際の開始時刻をキャッシュしておく
     // → computeStartTimes() がガントチャート用に正確な開始時刻を返せるようにする
     startTimesCache_[solution] = start;
+    // Solution オブジェクト自身にも保存（コピー時も引き継がれる）
+    solution->startTimes_ = start;
 
     solution->setObjective(0, (double) makespan);
     solution->setObjective(1, totalCost);
@@ -896,6 +910,12 @@ std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
     auto it = startTimesCache_.find(solution);
     if (it != startTimesCache_.end()) {
         return it->second;
+    }
+
+    // Solution オブジェクト自身に保存された開始時刻があれば返す
+    // （コピーによってポインタが変わっても startTimes_ は引き継がれる）
+    if (!solution->startTimes_.empty()) {
+        return solution->startTimes_;
     }
 
     // キャッシュがない場合は従来の最早開始スケジュール（ESS）で計算

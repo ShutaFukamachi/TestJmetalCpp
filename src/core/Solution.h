@@ -28,6 +28,7 @@
 #include <limits>
 #include <stdlib.h>
 #include <stddef.h>
+#include <vector>
 #include "Problem.h"
 #include "Variable.h"
 #include "SolutionType.h"
@@ -63,6 +64,8 @@ private:
   double distanceToSolutionSet_;
 
 public:
+  // RCPSP用: evaluate()で確定した開始時刻をここに保存し、コピー時も引き継ぐ
+  std::vector<int> startTimes_;
   Solution ();
   Solution (int numberOfObjectives);
   Solution (Problem * problem);

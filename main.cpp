@@ -126,13 +126,32 @@ static void writeResults(const string &funPath,
             }
         }
     }
+    // min_makespan 解のインデックスを特定
+    int minMakespanIdx = 0;
+    double minMs = pareto->get(0)->getObjective(0);
+    for (int i = 1; i < pareto->size(); ++i) {
+        double ms = pareto->get(i)->getObjective(0);
+        if (ms < minMs) { minMs = ms; minMakespanIdx = i; }
+    }
+
     schedFile << pareto->size() << "\n";
 
     for (int i = 0; i < pareto->size(); ++i) {
         Solution *sol = pareto->get(i);
-        funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
 
         Variable **vars = sol->getDecisionVariables();
+
+        // min_makespan → ESS (shift=0) 再評価
+        //   FUN・SCHED の両方に ESS 値を使う → 値が一致し Gantt もコンパクト
+        // その他       → startTimes_ をそのまま使用（コスト最適化配置を反映）
+        if (i == minMakespanIdx && rcpsp) {
+            rcpsp->setOutputMaxShift(0);
+            rcpsp->evaluate(sol);
+            rcpsp->setOutputMaxShift(-1);
+        }
+
+        funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
+
         for (int j = 0; j < nVar; ++j) {
             varFile << vars[j]->getValue();
             if (j + 1 < nVar) varFile << " ";
@@ -330,13 +349,23 @@ int main(int argc, char **argv) {
             return 0;
         }
 
-        // ---- バッチ実行: 対象インスタンスをここに列挙 ----
-        const vector<string> instances = {
-            "j30.sm/j301_1.sm",
-            "j30.sm/j302_1.sm",
-            "j60.sm/j601_1.sm",
-            // 必要に応じてコメントアウトを外す
-        };
+        // ---- バッチ実行 ----
+        vector<string> instances;
+        for (int i = 1; i <= 48; ++i) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "j60.sm/j60%d_1.sm", i);
+            instances.push_back(string(buf));
+        }
+        for (int i = 1; i <= 48; ++i) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "j90.sm/j90%d_1.sm", i);
+            instances.push_back(string(buf));
+        }
+        for (int i = 1; i <= 60; ++i) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "j120.sm/j120%d_1.sm", i);
+            instances.push_back(string(buf));
+        }
 
         for (const auto &inst : instances) {
             runAllConditions(inst);
@@ -350,8 +379,5 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-
-
-
 
 

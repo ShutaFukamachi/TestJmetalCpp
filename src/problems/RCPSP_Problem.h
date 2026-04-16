@@ -71,14 +71,20 @@ public:
     void resetEvalCounter()      { evalCounter_ = 0; }
     void clearStartTimesCache()  { startTimesCache_.clear(); }
 
+    // 出力用再評価: maxShift を固定値に上書きする（-1 で通常のランダム動作に戻す）
+    //   0     → ESS（全ジョブ最早時刻）
+    //   N > 0 → 全 schedObj=1 ジョブに maxShift=N を固定（決定論的コスト最適化）
+    void setOutputMaxShift(int shift) { outputMaxShift_ = shift; }
+
 protected:
     RCPSP_Instance instance;
 
 private:
-    int strategy_       = 4;
-    int evalCounter_    = 0;
-    int maxEvaluations_ = 0;
-    int numberOfJobs_   = 0;
+    int  strategy_           = 4;
+    int  evalCounter_        = 0;
+    int  maxEvaluations_     = 0;
+    int  numberOfJobs_       = 0;
+    int  outputMaxShift_     = -1;   // -1: 通常ランダム, ≥0: 固定値
 
     // evaluate() で確定した実際の開始時刻をキャッシュする
     // computeStartTimes() はこれを優先して返す
