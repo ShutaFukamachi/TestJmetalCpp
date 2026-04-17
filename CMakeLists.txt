@@ -61,6 +61,9 @@ add_executable(BnBJmetalCpp main_BnB_RCPSP_with_TimeWindow_ResourceChange.cpp
 add_executable(NSGAJmetalCpp main_NSGAII_RCPSP_with_TimeWindow_ResourceChange.cpp
 )
 
+add_executable(NSGASplitCpp main_NSGAII_RCPSP_ActivitySplitting.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
@@ -81,6 +84,14 @@ target_link_libraries(BnBJmetalCpp PRIVATE
 )
 
 target_link_libraries(NSGAJmetalCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(NSGASplitCpp PRIVATE
         jmetalcpp
 
         gurobi130

@@ -14,6 +14,7 @@
 #include "Variable.h"
 #include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
+#include "problems/RCPSP_Problem_Splitting.h"
 #include "operators/crossover/PermutationCrossover.h"
 #include "operators/mutation/PermutationMutation.h"
 #include "operators/selection/BinaryTournament2.h"
@@ -55,21 +56,24 @@ static string detectSizeTag(const string &path) {
     return "unknown";
 }
 
-// ============================================================
-//  RR/RV 条件タグ文字列
-//   例: rr=0.5, rv=true  → "RR050_RV1"
-//       rr=0.0, rv=false → "RR000_RV0"
-// ============================================================
 static string conditionTag(double rr, bool rv) {
-    // rr を 3 桁整数で表す (0.25 → "025")
     int rrInt = static_cast<int>(std::round(rr * 100));
     char buf[32];
     snprintf(buf, sizeof(buf), "RR%03d_RV%d", rrInt, rv ? 1 : 0);
     return string(buf);
 }
 
+static string modeTag(ActivitySplittingMode mode) {
+    switch (mode) {
+        case ActivitySplittingMode::P1: return "P1";
+        case ActivitySplittingMode::P2: return "P2";
+        case ActivitySplittingMode::P3: return "P3";
+    }
+    return "P1";
+}
+
 // ============================================================
-//  出力ヘルパー: SolutionSet を FUN/VAR/SCHED ファイルに書き出す
+//  結果出力ヘルパー
 // ============================================================
 static void writeResults(const string &funPath,
                          const string &varPath,
@@ -81,8 +85,8 @@ static void writeResults(const string &funPath,
     ofstream varFile(varPath.c_str());
     ofstream schedFile(schedPath.c_str());
 
-    int nJobs = rcpsp ? rcpsp->getNumJobs()      : 0;
-    int nRes  = rcpsp ? rcpsp->getNumResources() : 0;
+    int nJobs = rcpsp ? rcpsp->getNumJobs()          : 0;
+    int nRes  = rcpsp ? rcpsp->getNumResources()      : 0;
     int nVar  = rcpsp ? rcpsp->getNumberOfVariables() : 0;
 
     // SCHEDヘッダー
@@ -126,7 +130,8 @@ static void writeResults(const string &funPath,
             }
         }
     }
-    // min_makespan 解のインデックスを特定
+
+    // min_makespan 解のインデックス
     int minMakespanIdx = 0;
     double minMs = pareto->get(0)->getObjective(0);
     for (int i = 1; i < pareto->size(); ++i) {
@@ -138,12 +143,9 @@ static void writeResults(const string &funPath,
 
     for (int i = 0; i < pareto->size(); ++i) {
         Solution *sol = pareto->get(i);
-
         Variable **vars = sol->getDecisionVariables();
 
-        // min_makespan → ESS (shift=0) 再評価
-        //   FUN・SCHED の両方に ESS 値を使う → 値が一致し Gantt もコンパクト
-        // その他       → startTimes_ をそのまま使用（コスト最適化配置を反映）
+        // min_makespan 解は ESS 再評価（開始時刻をコンパクトにする）
         if (i == minMakespanIdx && rcpsp) {
             rcpsp->setOutputMaxShift(0);
             rcpsp->evaluate(sol);
@@ -168,53 +170,53 @@ static void writeResults(const string &funPath,
 }
 
 // ============================================================
-//  1インスタンス × 1条件 (rr, rv) の NSGA-II 実行
+//  1インスタンス × 1条件 × 1モード (P1/P2/P3) の NSGA-II 実行
 //
-//  フェーズ8の仕様通り：
-//    max_shift 戦略 1〜4 をそれぞれ独立実行（各 EVALS_PER_STRATEGY 評価）
-//    各実行の第1パレートフロントを統合し、最終的に非支配フィルタを適用
-//
-//  出力ファイル:
-//    FUN_<instanceId>_<condTag>   : 最終パレートフロント (makespan cost)
-//    VAR_<instanceId>_<condTag>   : 決定変数
-//    SCHED_<instanceId>_<condTag> : ガントチャート用スケジュール情報
+//  戦略 1〜4 を独立実行し、第1パレートフロントを統合、
+//  最終的に非支配フィルタを適用した結果を出力する。
 // ============================================================
 static void runNSGA(const string &instanceFile,
                     const string &tagPrefix,
                     double rr,
-                    bool   rv)
+                    bool   rv,
+                    ActivitySplittingMode mode)
 {
     const string ctag = conditionTag(rr, rv);
+    const string mtag = modeTag(mode);
 
     cout << "============================================\n";
-    cout << "[RUN] " << tagPrefix << "  " << ctag << "\n";
+    cout << "[RUN] " << tagPrefix << "  " << ctag << "  mode=" << mtag << "\n";
     cout << "  instance : " << instanceFile << "\n";
     cout << "  RR=" << rr << "  RV=" << (rv ? 1 : 0) << "\n";
     cout << "============================================\n";
 
     // ---- パラメータ ----
-    int populationSize     = 100;
-    int evalsPerStrategy   = 200000;  // 論文: 各戦略 500 万評価
-    const int numStrategies = 4;       // 論文: max_shift 戦略 1〜4
+    int populationSize   = 100;
+    int evalsPerStrategy = 200000;
+    const int numStrategies = 4;
 
-    // ---- 問題インスタンス生成（容量テーブルは一度だけ作成・全戦略で共有）----
-    RCPSP_Problem *problem = new RCPSP_Problem(instanceFile, /*strategy=*/1, rr, rv);
+    // ---- 問題インスタンス生成 ----
+    // P1: 基底クラス RCPSP_Problem をそのまま使う（分割なし）
+    // P2/P3: RCPSP_Problem_Splitting を使う
+    RCPSP_Problem *problem = nullptr;
+    if (mode == ActivitySplittingMode::P1) {
+        problem = new RCPSP_Problem(instanceFile, /*strategy=*/1, rr, rv);
+    } else {
+        problem = new RCPSP_Problem_Splitting(instanceFile, mode, /*strategy=*/1, rr, rv);
+    }
     problem->setMaxEvaluations(evalsPerStrategy);
 
-    // ---- 戦略ごとに独立実行し、第1パレートフロントを収集 ----
-    // combined: 4 戦略のパレート解をまとめる
+    // ---- 各戦略を独立実行 ----
     SolutionSet *combined = new SolutionSet(numStrategies * populationSize * 4);
 
     for (int strategy = 1; strategy <= numStrategies; ++strategy) {
-        cout << "\n  [Strategy " << strategy << "/" << numStrategies
+        cout << "\n  [" << mtag << " Strategy " << strategy << "/" << numStrategies
              << "]  maxEvals=" << evalsPerStrategy << "\n";
 
-        // 戦略切り替え・評価カウンタリセット
         problem->setStrategy(strategy);
         problem->resetEvalCounter();
         problem->clearStartTimesCache();
 
-        // NSGA-II インスタンス生成
         Algorithm *algorithm = new NSGAII(problem);
         algorithm->setInputParameter("populationSize", &populationSize);
         algorithm->setInputParameter("maxEvaluations", &evalsPerStrategy);
@@ -222,7 +224,6 @@ static void runNSGA(const string &instanceFile,
         int lsFlag = 0;
         algorithm->setInputParameter("useLocalSearch", &lsFlag);
 
-        // 演算子
         double crossoverProbability = 0.9;
         Operator *crossover = new PermutationCrossover(crossoverProbability);
 
@@ -236,28 +237,25 @@ static void runNSGA(const string &instanceFile,
         algorithm->addOperator("mutation",  mutation);
         algorithm->addOperator("selection", selection);
 
-        // 実行
         SolutionSet *population = algorithm->execute();
 
-        // 第1パレートフロントを抽出して combined に追加
         {
             Ranking ranking(population);
             if (ranking.getNumberOfSubfronts() > 0) {
                 SolutionSet *front0 = ranking.getSubfront(0);
-                cout << "  [Strategy " << strategy << "] Pareto front size: "
-                     << front0->size() << "\n";
+                cout << "  [" << mtag << " Strategy " << strategy
+                     << "] Pareto front size: " << front0->size() << "\n";
                 for (int i = 0; i < front0->size(); ++i) {
                     combined->add(new Solution(front0->get(i)));
                 }
             }
-        }  // ranking がここで破棄される
+        }
 
         delete population;
         delete algorithm;
-        // 演算子は Algorithm が所有しないためリークするが既存コードと同様
     }
 
-    // ---- 4 戦略の統合結果に対して最終非支配フィルタを適用（フェーズ9）----
+    // ---- 統合結果に非支配フィルタを適用 ----
     SolutionSet *finalPareto = new SolutionSet(combined->size());
     {
         Ranking finalRanking(combined);
@@ -267,13 +265,14 @@ static void runNSGA(const string &instanceFile,
                 finalPareto->add(new Solution(front0->get(i)));
             }
         }
-    }  // finalRanking がここで破棄される
+    }
     delete combined;
 
     // ---- 結果出力 ----
-    const string funPath   = "FUN_"   + tagPrefix + "_" + ctag;
-    const string varPath   = "VAR_"   + tagPrefix + "_" + ctag;
-    const string schedPath = "SCHED_" + tagPrefix + "_" + ctag;
+    //  ファイル名形式: FUN_<instanceId>_<condTag>_<modeTag>
+    const string funPath   = "FUN_"   + tagPrefix + "_" + ctag + "_" + mtag;
+    const string varPath   = "VAR_"   + tagPrefix + "_" + ctag + "_" + mtag;
+    const string schedPath = "SCHED_" + tagPrefix + "_" + ctag + "_" + mtag;
 
     writeResults(funPath, varPath, schedPath, finalPareto, problem);
 
@@ -285,9 +284,9 @@ static void runNSGA(const string &instanceFile,
 }
 
 // ============================================================
-//  1インスタンスに対して 8 通りの RR/RV 条件を全部実行
+//  1インスタンスに対して全 RR/RV 条件 × P1/P2/P3 を実行
 // ============================================================
-static void runAllConditions(const string &instanceFile) {
+static void runAllConditionsAndModes(const string &instanceFile) {
     const string prefix  = baseNameNoExt(instanceFile);
     const string sizeTag = detectSizeTag(instanceFile);
 
@@ -295,16 +294,13 @@ static void runAllConditions(const string &instanceFile) {
         throw runtime_error("Cannot detect sizeTag from path: " + instanceFile);
     }
 
-    // --- コストファイルの準備 ---
-    // インスタンスごとの costs_<id>.csv を costs.csv にコピーする
-    // costs_<id>.csv がなければ、RCPSP_Problem が自動生成して costs.csv に保存する
+    // コストファイルの準備
     const string costsFile = "costs_" + prefix + ".csv";
     if (fileExists(costsFile)) {
         copyFileBinary(costsFile, "costs.csv");
         cout << "[COST] " << costsFile << " -> costs.csv\n";
     } else {
-        cout << "[COST] " << costsFile << " not found. "
-             << "Will be auto-generated on first run.\n";
+        cout << "[COST] " << costsFile << " not found. Will be auto-generated.\n";
     }
     RCPSP_Problem::resetGlobalCostSeries();
 
@@ -312,30 +308,36 @@ static void runAllConditions(const string &instanceFile) {
     cout << " Instance: " << prefix << " (" << sizeTag << ")\n";
     cout << "========================================\n";
 
-    // ============================================================
-    //  論文 Table 5 の RR/RV 条件 8 通り
-    //    RR = 0.0, 0.25, 0.5, 0.75
-    //    RV = false (0), true (1)
-    // ============================================================
     struct Cond { double rr; bool rv; };
     const vector<Cond> conditions = {
-        {0.00, false},  // RR=0,    RV=0
-        {0.00, true },  // RR=0,    RV=1
-        {0.25, false},  // RR=0.25, RV=0
-        {0.25, true },  // RR=0.25, RV=1
-        {0.50, false},  // RR=0.5,  RV=0
-        {0.50, true },  // RR=0.5,  RV=1
-        {0.75, false},  // RR=0.75, RV=0
-        {0.75, true },  // RR=0.75, RV=1
+        {0.00, false},
+        {0.00, true },
+        {0.25, false},
+        {0.25, true },
+        {0.50, false},
+        {0.50, true },
+        {0.75, false},
+        {0.75, true },
+    };
+
+    // P1 / P2 / P3 の 3 モード
+    const vector<ActivitySplittingMode> modes = {
+        ActivitySplittingMode::P1,
+        ActivitySplittingMode::P2,
+        ActivitySplittingMode::P3,
     };
 
     for (const auto &c : conditions) {
-        // コストテーブルは同一インスタンス内で再利用する
-        // (RCPSP_Problem のコンストラクタが capacity_t だけ新たに作る)
-        runNSGA(instanceFile, prefix, c.rr, c.rv);
+        // 各条件でコストテーブルを共有するためにリセット
+        RCPSP_Problem::resetGlobalCostSeries();
+        if (fileExists(costsFile)) copyFileBinary(costsFile, "costs.csv");
+
+        for (auto m : modes) {
+            runNSGA(instanceFile, prefix, c.rr, c.rv, m);
+        }
     }
 
-    cout << "[BATCH] Instance " << prefix << " all conditions done.\n\n";
+    cout << "[BATCH] Instance " << prefix << " all conditions/modes done.\n\n";
 }
 
 // ============================================================
@@ -343,14 +345,29 @@ static void runAllConditions(const string &instanceFile) {
 // ============================================================
 int main(int argc, char **argv) {
     try {
-        // コマンドライン引数でインスタンスを1つ指定した場合
         if (argc >= 2) {
-            runAllConditions(argv[1]);
+            // コマンドライン引数でインスタンス指定
+            runAllConditionsAndModes(argv[1]);
             return 0;
         }
 
         // ---- バッチ実行 ----
         vector<string> instances;
+
+        // 動作確認用: j301_1.sm のみ実行
+        instances.push_back(string("j30.sm/j301_1.sm"));
+
+        // j30 全インスタンス
+        /*
+        for (int i = 1; i <= 48; ++i) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "j30.sm/j30%d_1.sm", i);
+            instances.push_back(string(buf));
+        }
+        */
+
+        // j60 〜 j120
+        /*
         for (int i = 1; i <= 48; ++i) {
             char buf[64];
             snprintf(buf, sizeof(buf), "j60.sm/j60%d_1.sm", i);
@@ -366,9 +383,10 @@ int main(int argc, char **argv) {
             snprintf(buf, sizeof(buf), "j120.sm/j120%d_1.sm", i);
             instances.push_back(string(buf));
         }
+        */
 
         for (const auto &inst : instances) {
-            runAllConditions(inst);
+            runAllConditionsAndModes(inst);
         }
 
         cout << "[BATCH] All done.\n";
@@ -379,5 +397,3 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-
-

@@ -1001,6 +1001,20 @@ std::vector<std::vector<int>> RCPSP_Problem::get_precedence_matrix() const {
     return mat;
 }
 
+// ===== 派生クラス向け protected ヘルパー =====
+
+double RCPSP_Problem::computeSlotCost(int j, int t, int horizon) const {
+    double c = 0.0;
+    for (int k = 0; k < instance.nRes; ++k) {
+        c += resourceCost(k, t, horizon) * (double)instance.demand[j][k];
+    }
+    return c;
+}
+
+int RCPSP_Problem::capacityAtTime(int k, int t) const {
+    return capacityAt(instance, k, t);
+}
+
 // ===== RCPSP_Problem: global cost series control =====
 void RCPSP_Problem::resetGlobalCostSeries() {
     resetCostSeriesInternal();

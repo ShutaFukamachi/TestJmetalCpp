@@ -79,12 +79,21 @@ public:
 protected:
     RCPSP_Instance instance;
 
-private:
     int  strategy_           = 4;
     int  evalCounter_        = 0;
     int  maxEvaluations_     = 0;
-    int  numberOfJobs_       = 0;
     int  outputMaxShift_     = -1;   // -1: 通常ランダム, ≥0: 固定値
+
+    // ---- 派生クラス（RCPSP_Problem_Splitting）向けヘルパー ----
+
+    // ジョブ j が時刻 t に 1 単位実行したときのコスト（全資源の合計）
+    double computeSlotCost(int j, int t, int horizon) const;
+
+    // 資源 k の時刻 t における容量（時間依存テーブル優先、なければ定数）
+    int capacityAtTime(int k, int t) const;
+
+private:
+    int  numberOfJobs_       = 0;
 
     // evaluate() で確定した実際の開始時刻をキャッシュする
     // computeStartTimes() はこれを優先して返す
