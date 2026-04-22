@@ -613,9 +613,25 @@ void RCPSP_Problem::evaluate(Solution *solution) {
             }
         }
 
-        // P1: 常に最早実行可能時刻に配置（コスト最適化なし）
-        place(j, t_mak);
-        totalCost += jobCostAt(j, t_mak);
+        // schedObj[j]==1 かつ maxShift[j]>0: コスト優先
+        //   [t_mak, t_mak+maxShift] の範囲で最安の連続配置位置を探す
+        // schedObj[j]==0: makespan 優先（ESS = t_mak に即配置）
+        int placedAt = t_mak;
+        if (schedObj[j] == 1 && maxShift[j] > 0) {
+            int latest = std::min(T - d, t_mak + maxShift[j]);
+            double bestCostJ = jobCostAt(j, t_mak);
+            for (int t = t_mak + 1; t <= latest; ++t) {
+                if (canPlace(j, t)) {
+                    double c = jobCostAt(j, t);
+                    if (c < bestCostJ) {
+                        bestCostJ = c;
+                        placedAt  = t;
+                    }
+                }
+            }
+        }
+        place(j, placedAt);
+        totalCost += jobCostAt(j, placedAt);
     }
 
     int makespan = 0;
