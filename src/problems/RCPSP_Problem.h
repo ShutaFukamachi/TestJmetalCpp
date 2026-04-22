@@ -60,6 +60,12 @@ public:
     //   コンストラクタが自動で呼ぶが、後から呼び直すことも可能
     void buildTimeVaryingCapacity(double rr, bool rv);
 
+    // P1/P2/P3 インスタンス間で同一の capacity_t を共有するためのセッター
+    // 外部で生成した capacity_t をそのままセットする（コピー渡し）
+    void setCapacityT(const std::vector<std::vector<int>>& cap_t) {
+        instance.capacity_t = cap_t;
+    }
+
     // BnB 用: ジョブ j を時刻 t に配置したときのコストを返す
     double computeJobCostAt(int j, int t, int horizon) const;
 
@@ -91,6 +97,10 @@ protected:
 
     // 資源 k の時刻 t における容量（時間依存テーブル優先、なければ定数）
     int capacityAtTime(int k, int t) const;
+
+    // P2/P3 派生クラス向け: 基底クラスと同一の RNG を使って maxShift を生成する
+    // → P1 と P2/P3 が同じ乱数列を共有することで maxShift の統計的性質を揃える
+    std::vector<int> buildMaxShiftForEval(int T) const;
 
 private:
     int  numberOfJobs_       = 0;

@@ -66,6 +66,9 @@ private:
 public:
   // RCPSP用: evaluate()で確定した開始時刻をここに保存し、コピー時も引き継ぐ
   std::vector<int> startTimes_;
+  // RCPSP用: 各ジョブが実際に実行した時刻スロットのリスト（P2/P3対応）
+  // execSlots_[j] = ジョブjが実行した全時刻 t のソート済みリスト（Σ=d_j個）
+  std::vector<std::vector<int>> execSlots_;
   Solution ();
   Solution (int numberOfObjectives);
   Solution (Problem * problem);

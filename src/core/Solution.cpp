@@ -144,6 +144,7 @@ Solution::Solution (Solution *solution) {
   rank_ = solution->getRank();
   location_ = solution->getLocation();
   startTimes_ = solution->startTimes_;
+  execSlots_  = solution->execSlots_;
 
   // create the variables
   //old fashion of copying variables

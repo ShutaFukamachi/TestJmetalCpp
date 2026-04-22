@@ -473,7 +473,6 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     int nRes = instance.nRes;
 
     Variable **vars = solution->getDecisionVariables();
-    int nVars       = solution->getNumberOfVariables();
 
     std::vector<int> seq(n);
     for (int i = 0; i < n; ++i) {
@@ -487,26 +486,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
         for (int i = 0; i < n; ++i) vars[i]->setValue((double)seq[i]);
     }
 
-    std::vector<int> schedObj(n, 0);
-    if (nVars >= 2 * n) {
-        for (int j = 0; j < n; ++j) {
-            int v = (int) vars[n + j]->getValue();
-            schedObj[j] = (v != 0) ? 1 : 0;
-        }
-    } else {
-        std::bernoulli_distribution coin(0.5);
-        for (int j = 0; j < n; ++j) {
-            schedObj[j] = coin(rng) ? 1 : 0;
-        }
-    }
-    if (n > 0) schedObj[0]     = 0;
-    if (n > 1) schedObj[n - 1] = 0;
-
-    // ============================================================
-    // [変更] T の計算
-    //   capacity_t のホライゾンが長い場合はそちらを使う
-    //   (buildTimeVaryingCapacity が休暇込みの余裕を設定済み)
-    // ============================================================
+    // ---- ホライゾン T の決定 ----
     int T = 0;
     for (int j = 0; j < n; ++j) T += instance.duration[j];
     if (!instance.capacity_t.empty() && !instance.capacity_t[0].empty()) {
@@ -515,18 +495,29 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     }
     if (T <= 0) T = 1;
 
-    // maxShift の設定
-    // outputMaxShift_ >= 0 のとき（出力用再評価）は固定値を使う（決定論的）
-    //   0   → ESS（schedObj=1 ジョブも最早時刻に配置）
-    //   N>0 → schedObj=1 ジョブを [t_mak, t_mak+N] の最安時刻に配置
-    std::vector<int> maxShift;
-    if (outputMaxShift_ >= 0) {
-        maxShift.assign(n, outputMaxShift_);
-        if (n > 0) maxShift[0]     = 0;
-        if (n > 1) maxShift[n - 1] = 0;
-    } else {
-        buildMaxShiftVector(strategy_, T, n, evalCounter_, maxEvaluations_, maxShift);
+    // ---- schedObj ベクタ取得 ----
+    // schedObj[j] == 0: makespan 優先（ESS）
+    // schedObj[j] == 1: コスト優先（[t_mak, t_mak+maxShift] 内の最安時刻）
+    std::vector<int> schedObj(n, 0);
+    if (numberOfVariables_ >= 2 * n) {
+        for (int j = 0; j < n; ++j) {
+            int v = (int)vars[n + j]->getValue();
+            schedObj[j] = (v != 0) ? 1 : 0;
+        }
     }
+    // ダミー端点は常に makespan 優先
+    if (n > 0) schedObj[0]     = 0;
+    if (n > 1) schedObj[n - 1] = 0;
+
+    // ---- maxShift ベクタ構築 ----
+    std::vector<int> maxShift(n, 0);
+    if (outputMaxShift_ >= 0) {
+        std::fill(maxShift.begin(), maxShift.end(), outputMaxShift_);
+    } else {
+        maxShift = buildMaxShiftForEval(T);
+    }
+    if (n > 0) maxShift[0]     = 0;
+    if (n > 1) maxShift[n - 1] = 0;
 
     std::vector<std::vector<int>> preds(n);
     for (int j = 0; j < n; ++j) {
@@ -622,31 +613,9 @@ void RCPSP_Problem::evaluate(Solution *solution) {
             }
         }
 
-        int t_final = t_mak;
-
-        if (schedObj[j] == 1 && maxShift[j] > 0) {
-            int latest = std::min(T - d, t_mak + maxShift[j]);
-            double bestC = std::numeric_limits<double>::infinity();
-            int bestT = -1;
-
-            for (int t = t_mak; t <= latest; ++t) {
-                if (!canPlace(j, t)) continue;
-                double c = jobCostAt(j, t);
-                if (c < bestC) {
-                    bestC = c;
-                    bestT = t;
-                }
-            }
-
-            if (bestT >= 0) {
-                t_final = bestT;
-            } else {
-                t_final = t_mak;
-            }
-        }
-
-        place(j, t_final);
-        totalCost += jobCostAt(j, t_final);
+        // P1: 常に最早実行可能時刻に配置（コスト最適化なし）
+        place(j, t_mak);
+        totalCost += jobCostAt(j, t_mak);
     }
 
     int makespan = 0;
@@ -664,6 +633,16 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     startTimesCache_[solution] = start;
     // Solution オブジェクト自身にも保存（コピー時も引き継がれる）
     solution->startTimes_ = start;
+
+    // P1: 連続実行なので execSlots_[j] = [start_j, start_j+1, ..., start_j+d_j-1]
+    solution->execSlots_.resize(n);
+    for (int j = 0; j < n; ++j) {
+        int dj = instance.duration[j];
+        solution->execSlots_[j].resize(dj);
+        for (int i = 0; i < dj; ++i) {
+            solution->execSlots_[j][i] = start[j] + i;
+        }
+    }
 
     solution->setObjective(0, (double) makespan);
     solution->setObjective(1, totalCost);
@@ -1002,6 +981,24 @@ std::vector<std::vector<int>> RCPSP_Problem::get_precedence_matrix() const {
 }
 
 // ===== 派生クラス向け protected ヘルパー =====
+
+// ============================================================
+// buildMaxShiftForEval
+//
+//  P2/P3 の evaluate() から呼び出す。
+//  基底クラス P1 と同一の静的 rng を使って maxShift を生成することで、
+//  P1 と P2/P3 の maxShift 統計的性質を揃える。
+//
+//  【修正前の問題】
+//    RCPSP_Problem_Splitting.cpp 内の splitRng(54321) を使っていたため、
+//    同一解を P1 と P2 で評価しても maxShift が異なり、
+//    schedObj=1 ジョブのシフト量が変わってスケジュールが diverge していた。
+// ============================================================
+std::vector<int> RCPSP_Problem::buildMaxShiftForEval(int T) const {
+    std::vector<int> maxShift;
+    buildMaxShiftVector(strategy_, T, numberOfJobs_, evalCounter_, maxEvaluations_, maxShift);
+    return maxShift;
+}
 
 double RCPSP_Problem::computeSlotCost(int j, int t, int horizon) const {
     double c = 0.0;
