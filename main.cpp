@@ -330,7 +330,7 @@ void NSGASplittingRunner::writeResultFiles(
         prob->evaluate(sol);
         prob->setOutputMaxShift(-1);
 
-        schedFile << sol->getObjective(0) << " " << sol->getObjective(1);
+        schedFile << origMS << " " << origCost;
         const vector<int> &st = sol->startTimes_;
         for (int j = 0; j < nJobs; ++j) {
             schedFile << " " << (j < (int)st.size() ? st[j] : 0);
@@ -601,7 +601,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-
 
 
 
