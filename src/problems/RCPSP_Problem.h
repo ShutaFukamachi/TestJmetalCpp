@@ -32,7 +32,7 @@ public:
     bool checkTopological(const std::vector<int> &seq) const;
     bool checkTopological(Solution *solution) const;
 
-    Solution* createRandomTopoSolution();
+    virtual Solution* createRandomTopoSolution();
 
     void localSearchOnActivityOrder(Solution *solution, int maxLSMoves = -1);
     void localSearchOnSchedObj     (Solution *solution, int maxLSMoves = -1);
@@ -101,6 +101,11 @@ protected:
     // P2/P3 派生クラス向け: 基底クラスと同一の RNG を使って maxShift を生成する
     // → P1 と P2/P3 が同じ乱数列を共有することで maxShift の統計的性質を揃える
     std::vector<int> buildMaxShiftForEval(int T) const;
+
+    // MaxShift 派生クラス向け: 先行制約を修復したトポロジカル順序を返す
+    static std::vector<int> topoRepair(const std::vector<int> &seq,
+                                       const std::vector<std::vector<int>> &successors,
+                                       int nJobs);
 
 private:
     int  numberOfJobs_       = 0;

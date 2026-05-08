@@ -3,5 +3,9 @@ C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/TestJmeta
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/BnBJmetalCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAJmetalCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGASplitCpp.dir
+C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGASetupCpp.dir
+C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGACompCpp.dir
+C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAMaxShiftCpp.dir
+C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAEncCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/edit_cache.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/rebuild_cache.dir

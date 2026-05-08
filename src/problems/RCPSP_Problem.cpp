@@ -135,6 +135,7 @@ static bool COST_INITIALIZED = false;
 static int  COST_T           = -1;
 static int  COST_R           = 4;
 static std::vector<std::vector<double>> COST_TABLE;
+static std::string COST_CSV_PATH = "costs.csv";
 
 static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
     std::ifstream fin(filename);
@@ -204,7 +205,7 @@ static void resetCostSeriesInternal() {
 }
 
 static void generateCostSeries(int R, int T) {
-    if (loadCostTableFromCSV("costs.csv", R)) return;
+    if (loadCostTableFromCSV(COST_CSV_PATH, R)) return;
 
     CostRNG crng;
     if (T <= 0) T = 1;
@@ -241,7 +242,7 @@ static void generateCostSeries(int R, int T) {
     }
 
     COST_R = R; COST_T = T; COST_INITIALIZED = true;
-    writeCostTableToCSV("costs.csv");
+    writeCostTableToCSV(COST_CSV_PATH);
     std::cout << "[RCPSP_Problem] Generated random cost series (R=" << R << ", T=" << T << ")\n";
 }
 
@@ -345,6 +346,17 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
     COST_R           = instance.nRes;
     COST_INITIALIZED = false;
     COST_T           = -1;
+
+    // インスタンス固有のコストCSVパスを設定（例: costs_j301_1.csv）
+    {
+        std::string base = filename;
+        size_t p = base.find_last_of("/\\");
+        if (p != std::string::npos) base = base.substr(p + 1);
+        size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos) base = base.substr(0, dot);
+        COST_CSV_PATH = "costs_" + base + ".csv";
+        std::cout << "[RCPSP_Problem] cost CSV path: " << COST_CSV_PATH << "\n";
+    }
 
     // ============================================================
     // [追加] RR>0 または RV=true のとき時間依存容量テーブルを生成
@@ -841,6 +853,14 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
         if (!improvedInThisSweep) break;
         if (maxLSMoves > 0 && acceptedMoves >= maxLSMoves) break;
     }
+}
+
+std::vector<int> RCPSP_Problem::topoRepair(
+        const std::vector<int> &seq,
+        const std::vector<std::vector<int>> &successors,
+        int nJobs)
+{
+    return repairToTopological(seq, successors, nJobs);
 }
 
 Solution* RCPSP_Problem::createRandomTopoSolution() {

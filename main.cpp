@@ -1,21 +1,27 @@
 // ============================================================
-//  main_NSGAII_RCPSP_ActivitySplitting.cpp
+//  main_NSGAII_RCPSP_EncodingComparison.cpp
 //
-//  NSGASplittingRunner クラス
-//  ─ P1/P2/P3 × NSGA-II の実験・ガントチャート出力を
-//    一つのクラスにまとめたメインファイル
+//  エンコーディング比較ランナー
+//  ─ 「従来の schedObj (0/1) エンコーディング」と
+//    「新しい max_shift エンコーディング」を
+//    同一インスタンス・同一条件で並べて実行し、
+//    FUN/SCHED ファイルを出力する。
 //
-//  【ガントチャート】
-//   P2/P3: バー開始位置 = 最初の実行時刻 (first_exec_time)
-//          '#'=実行、'.'=スパン内ギャップ、' '=範囲外
-//   タイトルに first_exec_time である旨を明記
+//  出力ファイル (cmake-build-*/ 直下):
+//    FUN_ENC_<prefix>_<cond>_SchedObj.txt   ─ 従来エンコーディング
+//    FUN_ENC_<prefix>_<cond>_MaxShift.txt   ─ 新エンコーディング
+//    SCHED_ENC_<prefix>_<cond>_SchedObj.txt
+//    SCHED_ENC_<prefix>_<cond>_MaxShift.txt
+//
+//  使い方:
+//    NSGAEncCpp [インスタンスファイル]
+//    例: NSGAEncCpp j30.sm/j301_1.sm
 // ============================================================
 
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <vector>
-#include <set>
 #include <string>
 #include <map>
 #include <iostream>
@@ -31,96 +37,72 @@
 #include "Variable.h"
 #include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
-#include "problems/RCPSP_Problem_Splitting.h"
+#include "problems/RCPSP_Problem_MaxShift.h"
 #include "operators/crossover/PermutationCrossover.h"
+#include "operators/crossover/MaxShiftCrossover.h"
 #include "operators/mutation/PermutationMutation.h"
+#include "operators/mutation/MaxShiftMutation.h"
 #include "operators/selection/BinaryTournament2.h"
 #include "util/Ranking.h"
 
 using namespace std;
 
 // ============================================================
-//  NSGASplittingRunner
-//
-//  P1/P2/P3 × NSGA-II の実験・テスト・ガントチャート出力
+//  EncodingComparisonRunner
 // ============================================================
-class NSGASplittingRunner {
+class EncodingComparisonRunner {
 public:
-    // ---- 実行設定 ------------------------------------------------
     struct Config {
         string instanceFile;
-        double rr            = 0.0;
-        bool   rv            = false;
-        int    populationSize   = 100;
+        double rr              = 0.0;
+        bool   rv              = false;
+        int    populationSize  = 100;
         int    evalsPerStrategy = 50000;
-        int    numStrategies    = 4;
+        int    numStrategies   = 4;
     };
 
-    explicit NSGASplittingRunner(Config cfg)
+    explicit EncodingComparisonRunner(Config cfg)
         : cfg_(std::move(cfg))
         , prefix_(toBaseNoExt(cfg_.instanceFile))
     {}
 
-    // ---- NSGA-II 実行 -------------------------------------------
+    // 両エンコーディングで NSGA-II を実行し最終パレートフロントを返す
+    //   enc=0 → schedObj (0/1)  enc=1 → max_shift
+    SolutionSet* runEncoding(int enc) const;
 
-    // P1/P2/P3 を指定して NSGA-II を実行し、最終パレートフロントを返す（呼び出し元が delete する）
-    SolutionSet* runMode(ActivitySplittingMode mode) const;
-
-    // 結果ファイル (FUN/VAR/SCHED) を書き出す
+    // FUN / SCHED ファイル出力
     void writeResultFiles(const string &outPrefix,
                           SolutionSet  *pareto,
-                          RCPSP_Problem *prob,
-                          ActivitySplittingMode mode) const;
+                          RCPSP_Problem *prob) const;
 
-    // ガントチャートをファイルに書き出す（min-makespan 解）
-    void writeGanttFile(const string &ganttPath,
-                        Solution      *sol,
-                        RCPSP_Problem *prob,
-                        ActivitySplittingMode mode) const;
-
-    // 全 RR/RV 条件 × P1/P2/P3 を実行
+    // 全 RR/RV 条件 × 両エンコーディングを実行
     void runAll() const;
 
 private:
     Config cfg_;
     string prefix_;
 
-    // ---- 内部ヘルパー -------------------------------------------
+    // schedObj エンコーディング (P1) 用オペレータをセット
+    static void attachSchedObjOps(Algorithm *algo, RCPSP_Problem *prob);
+    // max_shift エンコーディング用オペレータをセット
+    static void attachMaxShiftOps(Algorithm *algo, RCPSP_Problem_MaxShift *prob);
 
-    // Problem インスタンスを生成（モード・戦略を指定）
-    RCPSP_Problem* makeProblem(ActivitySplittingMode mode, int strategy) const;
-
-    // NSGA-II オペレータを生成して algorithm にセットする
-    static void attachOperators(Algorithm *algo, RCPSP_Problem *prob);
-
-    // ---- 文字列ユーティリティ -----------------------------------
-    static string toModeTag(ActivitySplittingMode m);
     static string toCondTag(double rr, bool rv);
     static string toBaseNoExt(const string &path);
     static bool   fileExists(const string &p);
     static void   copyFileBinary(const string &src, const string &dst);
 };
 
-// ============================================================
-//  static ユーティリティ
-// ============================================================
-string NSGASplittingRunner::toModeTag(ActivitySplittingMode m) {
-    switch (m) {
-        case ActivitySplittingMode::P1: return "P1";
-        case ActivitySplittingMode::P2: return "P2";
-        case ActivitySplittingMode::P3: return "P3";
-    }
-    return "P1";
-}
+// ---- static ユーティリティ ----
 
-string NSGASplittingRunner::toCondTag(double rr, bool rv) {
+string EncodingComparisonRunner::toCondTag(double rr, bool rv) {
     int rrInt = static_cast<int>(std::round(rr * 100));
     char buf[32];
     snprintf(buf, sizeof(buf), "RR%03d_RV%d", rrInt, rv ? 1 : 0);
     return string(buf);
 }
 
-string NSGASplittingRunner::toBaseNoExt(const string &path) {
+string EncodingComparisonRunner::toBaseNoExt(const string &path) {
     string s = path;
     size_t p = s.find_last_of("/\\");
     if (p != string::npos) s = s.substr(p + 1);
@@ -129,75 +111,76 @@ string NSGASplittingRunner::toBaseNoExt(const string &path) {
     return s;
 }
 
-bool NSGASplittingRunner::fileExists(const string &p) {
+bool EncodingComparisonRunner::fileExists(const string &p) {
     ifstream f(p.c_str(), ios::binary);
     return (bool)f;
 }
 
-void NSGASplittingRunner::copyFileBinary(const string &src, const string &dst) {
-    ifstream in(src.c_str(), ios::binary);
-    if (!in) throw runtime_error("Cannot open: " + src);
+void EncodingComparisonRunner::copyFileBinary(const string &src, const string &dst) {
+    ifstream in(src.c_str(),  ios::binary);
+    if (!in)  throw runtime_error("Cannot open: " + src);
     ofstream out(dst.c_str(), ios::binary);
     if (!out) throw runtime_error("Cannot open: " + dst);
     out << in.rdbuf();
 }
 
-// ============================================================
-//  makeProblem
-// ============================================================
-RCPSP_Problem* NSGASplittingRunner::makeProblem(
-        ActivitySplittingMode mode, int strategy) const
-{
-    if (mode == ActivitySplittingMode::P1) {
-        return new RCPSP_Problem(cfg_.instanceFile, strategy, cfg_.rr, cfg_.rv);
-    } else {
-        return new RCPSP_Problem_Splitting(cfg_.instanceFile, mode, strategy, cfg_.rr, cfg_.rv);
-    }
-}
+// ---- オペレータ設定 ----
 
-// ============================================================
-//  attachOperators
-// ============================================================
-void NSGASplittingRunner::attachOperators(Algorithm *algo, RCPSP_Problem *prob) {
+void EncodingComparisonRunner::attachSchedObjOps(Algorithm *algo, RCPSP_Problem *prob) {
     double crossP = 0.9;
     double mutP   = 1.0 / (double)prob->getNumberOfVariables();
+    algo->addOperator("crossover", new PermutationCrossover(crossP));
+    algo->addOperator("mutation",  new PermutationMutation(mutP, prob));
+    map<string, void*> sel;
+    algo->addOperator("selection", new BinaryTournament2(sel));
+}
 
-    Operator *crossover = new PermutationCrossover(crossP);
-    Operator *mutation  = new PermutationMutation(mutP, prob);
-    map<string, void*> selParams;
-    Operator *selection = new BinaryTournament2(selParams);
-
-    algo->addOperator("crossover", crossover);
-    algo->addOperator("mutation",  mutation);
-    algo->addOperator("selection", selection);
+void EncodingComparisonRunner::attachMaxShiftOps(Algorithm *algo,
+                                                  RCPSP_Problem_MaxShift *prob) {
+    double crossP = 0.9;
+    double mutP   = 1.0 / (double)prob->getNumberOfVariables();
+    algo->addOperator("crossover", new MaxShiftCrossover(crossP));
+    algo->addOperator("mutation",  new MaxShiftMutation(mutP, prob));
+    map<string, void*> sel;
+    algo->addOperator("selection", new BinaryTournament2(sel));
 }
 
 // ============================================================
-//  runMode: P1/P2/P3 の NSGA-II を numStrategies 回実行し
-//           最終パレートフロントを返す
+//  runEncoding
+//   enc == 0 : schedObj (0/1) エンコーディング (P1)
+//   enc == 1 : max_shift エンコーディング
 // ============================================================
-SolutionSet* NSGASplittingRunner::runMode(ActivitySplittingMode mode) const {
-    const string mtag = toModeTag(mode);
-    const string ctag = toCondTag(cfg_.rr, cfg_.rv);
+SolutionSet* EncodingComparisonRunner::runEncoding(int enc) const {
+    const string encTag = (enc == 0) ? "SchedObj" : "MaxShift";
+    const string ctag   = toCondTag(cfg_.rr, cfg_.rv);
 
-    cout << "\n============================================================\n";
-    cout << "[NSGASplittingRunner] mode=" << mtag
-         << "  " << ctag
+    cout << "\n------------------------------------------------------------\n";
+    cout << "[Encoding=" << encTag << "] " << ctag
          << "  instance=" << cfg_.instanceFile << "\n";
     cout << "  popSize=" << cfg_.populationSize
          << "  evalsPerStrategy=" << cfg_.evalsPerStrategy
          << "  numStrategies=" << cfg_.numStrategies << "\n";
-    cout << "============================================================\n";
+    cout << "------------------------------------------------------------\n";
 
-    RCPSP_Problem *prob = makeProblem(mode, 1);
-    prob->setMaxEvaluations(cfg_.evalsPerStrategy);
+    // 問題インスタンスを生成（両エンコーディングとも nVars=2n）
+    RCPSP_Problem *prob = nullptr;
+    RCPSP_Problem_MaxShift *probMS = nullptr;
+
+    if (enc == 0) {
+        prob = new RCPSP_Problem(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
+        prob->setMaxEvaluations(cfg_.evalsPerStrategy);
+    } else {
+        probMS = new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
+        probMS->setMaxEvaluations(cfg_.evalsPerStrategy);
+        prob = probMS;
+    }
 
     SolutionSet *combined = new SolutionSet(
             cfg_.numStrategies * cfg_.populationSize * 4);
 
     for (int s = 1; s <= cfg_.numStrategies; ++s) {
-        cout << "  [" << mtag << " Strategy " << s << "/" << cfg_.numStrategies
-             << "]  maxEvals=" << cfg_.evalsPerStrategy << "\n";
+        cout << "  [" << encTag << " Strategy " << s << "/"
+             << cfg_.numStrategies << "]\n";
 
         prob->setStrategy(s);
         prob->resetEvalCounter();
@@ -209,9 +192,12 @@ SolutionSet* NSGASplittingRunner::runMode(ActivitySplittingMode mode) const {
         int lsFlag = 0;
         algo->setInputParameter("populationSize", &popSz);
         algo->setInputParameter("maxEvaluations", &maxEv);
-        algo->setInputParameter("useLocalSearch", &lsFlag);
+        algo->setInputParameter("useLocalSearch",  &lsFlag);
 
-        attachOperators(algo, prob);
+        if (enc == 0)
+            attachSchedObjOps(algo, prob);
+        else
+            attachMaxShiftOps(algo, probMS);
 
         SolutionSet *pop = algo->execute();
 
@@ -239,33 +225,28 @@ SolutionSet* NSGASplittingRunner::runMode(ActivitySplittingMode mode) const {
         }
     }
     delete combined;
-    delete prob;
+    delete prob;   // probMS は prob と同一ポインタなので二重 delete 不要
 
-    cout << "[DONE] mode=" << mtag
-         << "  Final Pareto size=" << finalPareto->size() << "\n";
+    cout << "[DONE] " << encTag << "  Pareto size=" << finalPareto->size() << "\n";
     return finalPareto;
 }
 
 // ============================================================
-//  writeResultFiles: FUN / VAR / SCHED ファイル出力
+//  writeResultFiles: FUN / SCHED 出力
 // ============================================================
-void NSGASplittingRunner::writeResultFiles(
+void EncodingComparisonRunner::writeResultFiles(
         const string &outPrefix,
         SolutionSet  *pareto,
-        RCPSP_Problem *prob,
-        ActivitySplittingMode mode) const
+        RCPSP_Problem *prob) const
 {
-    const string funPath   = "FUN_"   + outPrefix;
-    const string varPath   = "VAR_"   + outPrefix;
-    const string schedPath = "SCHED_" + outPrefix;
+    const string funPath   = "FUN_ENC_"   + outPrefix + ".txt";
+    const string schedPath = "SCHED_ENC_" + outPrefix + ".txt";
 
     ofstream funFile(funPath.c_str());
-    ofstream varFile(varPath.c_str());
     ofstream schedFile(schedPath.c_str());
 
     int nJobs = prob->getNumJobs();
     int nRes  = prob->getNumResources();
-    int nVar  = prob->getNumberOfVariables();
 
     // SCHED ヘッダー
     schedFile << nJobs << " " << nRes << "\n";
@@ -313,188 +294,40 @@ void NSGASplittingRunner::writeResultFiles(
 
     for (int i = 0; i < pareto->size(); ++i) {
         Solution *sol = pareto->get(i);
-        Variable **vars = sol->getDecisionVariables();
 
-        double origMS   = sol->getObjective(0);
-        double origCost = sol->getObjective(1);
-        funFile << origMS << " " << origCost << "\n";
+        funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
 
-        for (int j = 0; j < nVar; ++j) {
-            varFile << vars[j]->getValue();
-            if (j + 1 < nVar) varFile << " ";
-        }
-        varFile << "\n";
-
-        // ESS 再評価して開始時刻を確定させる
-        prob->setOutputMaxShift(0);
-        prob->evaluate(sol);
-        prob->setOutputMaxShift(-1);
-
-        schedFile << origMS << " " << origCost;
-        const vector<int> &st = sol->startTimes_;
-        for (int j = 0; j < nJobs; ++j) {
-            schedFile << " " << (j < (int)st.size() ? st[j] : 0);
+        schedFile << sol->getObjective(0) << " " << sol->getObjective(1);
+        {
+            const vector<int> st = prob->computeStartTimes(sol);
+            for (int j = 0; j < nJobs; ++j)
+                schedFile << " " << (j < (int)st.size() ? st[j] : 0);
         }
         schedFile << "\n";
     }
 
-    cout << "[FILES] " << funPath << " / " << varPath << " / " << schedPath << "\n";
+    cout << "[FILES] " << funPath << " / " << schedPath << "\n";
+
+    // コンソールに min-makespan / min-cost を表示
+    if (pareto->size() > 0) {
+        double minMs   = pareto->get(0)->getObjective(0);
+        double minCost = pareto->get(0)->getObjective(1);
+        for (int i = 1; i < pareto->size(); ++i) {
+            minMs   = std::min(minMs,   pareto->get(i)->getObjective(0));
+            minCost = std::min(minCost, pareto->get(i)->getObjective(1));
+        }
+        cout << "         min_makespan=" << (int)minMs
+             << "  min_cost=" << fixed << setprecision(1) << minCost
+             << "  pareto_size=" << pareto->size() << "\n";
+    }
 }
 
 // ============================================================
-//  writeGanttFile: ガントチャートをテキストファイルに出力
-//
-//  P1:  各バーは連続ブロック（start_j から d_j スロット）
-//  P2/P3: バー開始位置 = 最初の実行時刻 (first_exec_time)
-//           '#' = 実行スロット、'.' = スパン内ギャップ、' ' = 範囲外
-//
-//  タイトルに P2/P3 は「バー開始 = 最初の実行時刻」である旨を明記する。
+//  runAll: 全 RR/RV 条件 × 両エンコーディングを実行
 // ============================================================
-void NSGASplittingRunner::writeGanttFile(
-        const string &ganttPath,
-        Solution      *sol,
-        RCPSP_Problem *prob,
-        ActivitySplittingMode mode) const
-{
-    ofstream os(ganttPath.c_str());
-    if (!os) {
-        cerr << "[Gantt] Cannot open: " << ganttPath << "\n";
-        return;
-    }
-
-    int n        = prob->getNumJobs();
-    int makespan = (int)sol->getObjective(0);
-    double cost  = sol->getObjective(1);
-    const auto &dur = prob->getDurations();
-    const auto &execSlots = sol->execSlots_;
-    const string mtag = toModeTag(mode);
-
-    // ---- タイトル ----
-    os << "======================================================================\n";
-    if (mode == ActivitySplittingMode::P1) {
-        os << " Gantt Chart [P1]\n";
-        os << " 各バーは連続した実行ブロック（開始時刻 = start_j）を示す\n";
-    } else {
-        os << " Gantt Chart [" << mtag << "]\n";
-        os << " バーの開始位置 = 最初の実行時刻 (first_exec_time)\n";
-        os << " '#' = 実行スロット  '.' = スパン内ギャップ（中断）  ' ' = 範囲外\n";
-    }
-    os << " Instance : " << cfg_.instanceFile << "\n";
-    os << " Makespan : " << makespan << "\n";
-    os << " Cost     : " << fixed << setprecision(2) << cost << "\n";
-    os << "======================================================================\n\n";
-
-    // ---- スケールを決める（表示幅 = min(makespan+1, 80)）----
-    // makespan が大きい場合は 1 文字 = scale タイムユニットで表示する
-    const int MAX_WIDTH = 80;
-    int scale = 1;
-    while ((makespan + 1) / scale > MAX_WIDTH) ++scale;
-    int dispWidth = (makespan / scale) + 1;
-
-    // ---- 時刻ヘッダー ----
-    // 10 の位
-    os << "     ";
-    for (int col = 0; col < dispWidth; ++col) {
-        int t = col * scale;
-        if (t % 10 == 0) {
-            // 3 桁以内のラベル
-            char lbl[8];
-            snprintf(lbl, sizeof(lbl), "%d", t);
-            // ラベルが収まるなら先頭文字だけ出す（重ならないように）
-            os << lbl[0];
-        } else {
-            os << ' ';
-        }
-    }
-    os << "\n";
-
-    // 1 の位
-    os << "     ";
-    for (int col = 0; col < dispWidth; ++col) {
-        int t = col * scale;
-        char c = '0' + (t % 10);
-        os << c;
-    }
-    os << "\n";
-
-    os << "  ---" << string(dispWidth, '-') << "\n";
-
-    // ---- 各ジョブのバー ----
-    for (int j = 0; j < n; ++j) {
-        int dj = (j < (int)dur.size()) ? dur[j] : 0;
-        if (dj <= 0) {
-            os << setw(4) << j << "| (d=0 dummy)\n";
-            continue;
-        }
-
-        // execSlots が空の場合は startTimes_ から再構成（フォールバック）
-        set<int> execSet;
-        int firstExec = 0, lastExec = 0;
-        if (j < (int)execSlots.size() && !execSlots[j].empty()) {
-            for (int t : execSlots[j]) execSet.insert(t);
-            firstExec = execSlots[j].front();
-            lastExec  = execSlots[j].back();
-        } else if (j < (int)sol->startTimes_.size()) {
-            firstExec = sol->startTimes_[j];
-            lastExec  = firstExec + dj - 1;
-            for (int t = firstExec; t <= lastExec; ++t) execSet.insert(t);
-        }
-
-        os << setw(4) << j << "| ";
-
-        for (int col = 0; col < dispWidth; ++col) {
-            int tFrom = col * scale;
-            int tTo   = tFrom + scale - 1;  // このカラムが表す時刻範囲
-
-            // このカラム [tFrom, tTo] に execSlot が 1 つでもあれば '#'
-            // execSlot はないが [firstExec, lastExec] 内なら '.'（ギャップ）
-            // 範囲外なら ' '
-            bool hasExec = false;
-            bool inSpan  = false;
-            for (int t2 = tFrom; t2 <= tTo; ++t2) {
-                if (execSet.count(t2)) { hasExec = true; break; }
-                if (t2 >= firstExec && t2 <= lastExec) inSpan = true;
-            }
-
-            if (hasExec) {
-                os << '#';
-            } else if (inSpan && mode != ActivitySplittingMode::P1) {
-                os << '.';
-            } else {
-                os << ' ';
-            }
-        }
-
-        // 右端に情報
-        os << "  d=" << dj << " first=" << firstExec << " last=" << lastExec;
-        if (mode != ActivitySplittingMode::P1) {
-            int gaps = (lastExec - firstExec + 1) - dj;
-            if (gaps > 0) os << " gaps=" << gaps;
-        }
-        os << "\n";
-    }
-
-    os << "\n[Scale: 1 char = " << scale << " time unit(s)]\n";
-    if (scale > 1) {
-        os << "  (makespan=" << makespan
-           << " > " << MAX_WIDTH << " => scaled down for readability)\n";
-    }
-    os << "======================================================================\n";
-
-    cout << "[Gantt] Written: " << ganttPath << "\n";
-}
-
-// ============================================================
-//  runAll: 全 RR/RV 条件 × P1/P2/P3 を実行
-// ============================================================
-void NSGASplittingRunner::runAll() const {
+void EncodingComparisonRunner::runAll() const {
     const string costsFile = "costs_" + prefix_ + ".csv";
-    if (fileExists(costsFile)) {
-        copyFileBinary(costsFile, "costs.csv");
-        cout << "[COST] " << costsFile << " -> costs.csv\n";
-    } else {
-        cout << "[COST] " << costsFile << " not found. Will be auto-generated.\n";
-    }
+    if (fileExists(costsFile)) copyFileBinary(costsFile, "costs.csv");
 
     struct Cond { double rr; bool rv; };
     const vector<Cond> conditions = {
@@ -503,11 +336,31 @@ void NSGASplittingRunner::runAll() const {
         {0.50, false}, {0.50, true },
         {0.75, false}, {0.75, true },
     };
-    const vector<ActivitySplittingMode> modes = {
-        ActivitySplittingMode::P1,
-        ActivitySplittingMode::P2,
-        ActivitySplittingMode::P3,
+
+    // エンコーディング名とタグ
+    const vector<pair<int,string>> encodings = {
+        {0, "SchedObj"},   // 従来 0/1 エンコーディング
+        {1, "MaxShift"},   // 新 max_shift エンコーディング
     };
+
+    cout << "\n============================================================\n";
+    cout << " Encoding Comparison Run\n";
+    cout << " Instance : " << cfg_.instanceFile << "\n";
+    cout << " popSize=" << cfg_.populationSize
+         << "  evalsPerStrategy=" << cfg_.evalsPerStrategy
+         << "  numStrategies=" << cfg_.numStrategies << "\n";
+    cout << "============================================================\n";
+
+    // 比較サマリ用テーブル（コンソール出力）
+    cout << "\n"
+         << left  << setw(14) << "Condition"
+         << right << setw(12) << "MS_SchedObj"
+         << setw(14) << "Cost_SchedObj"
+         << setw(12) << "MS_MaxShift"
+         << setw(14) << "Cost_MaxShift"
+         << setw(10) << "ΔMS"
+         << setw(12) << "ΔCost" << "\n";
+    cout << string(88, '-') << "\n";
 
     for (const auto &c : conditions) {
         RCPSP_Problem::resetGlobalCostSeries();
@@ -515,63 +368,55 @@ void NSGASplittingRunner::runAll() const {
 
         const string ctag = toCondTag(c.rr, c.rv);
 
-        for (auto m : modes) {
-            // このモード用のランナー（rr/rv を条件に合わせる）
-            Config modCfg  = cfg_;
-            modCfg.rr      = c.rr;
-            modCfg.rv      = c.rv;
-            NSGASplittingRunner runner(modCfg);
+        double minMs[2]   = {1e9, 1e9};
+        double minCost[2] = {1e9, 1e9};
+        int    paretoSz[2]= {0, 0};
 
-            SolutionSet *pareto = runner.runMode(m);
+        for (const auto &[enc, encTag] : encodings) {
+            Config modCfg = cfg_;
+            modCfg.rr = c.rr;
+            modCfg.rv = c.rv;
+            EncodingComparisonRunner runner(modCfg);
 
-            // 問題インスタンス（出力用）を再作成
-            RCPSP_Problem *prob = runner.makeProblem(m, 1);
+            SolutionSet *pareto = runner.runEncoding(enc);
 
-            // ファイル名プレフィックス: <prefix>_<condTag>_<modeTag>
-            const string mtag      = toModeTag(m);
-            const string outPrefix = prefix_ + "_" + ctag + "_" + mtag;
+            // 出力用問題インスタンスを作成
+            RCPSP_Problem *prob = nullptr;
+            if (enc == 0)
+                prob = new RCPSP_Problem(cfg_.instanceFile, 1, c.rr, c.rv);
+            else
+                prob = new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, c.rr, c.rv);
 
-            runner.writeResultFiles(outPrefix, pareto, prob, m);
+            const string outPrefix = prefix_ + "_" + ctag + "_" + encTag;
+            runner.writeResultFiles(outPrefix, pareto, prob);
 
-            // FUN の値を使って min-makespan 解と min-cost 解のガントチャートを出力
-            if (pareto->size() > 0) {
-                int minMsIdx   = 0;
-                int minCostIdx = 0;
-                double minMs   = pareto->get(0)->getObjective(0);
-                double minCost = pareto->get(0)->getObjective(1);
-                for (int i = 1; i < pareto->size(); ++i) {
-                    double ms   = pareto->get(i)->getObjective(0);
-                    double cost = pareto->get(i)->getObjective(1);
-                    if (ms   < minMs)   { minMs   = ms;   minMsIdx   = i; }
-                    if (cost < minCost) { minCost = cost; minCostIdx = i; }
-                }
-
-                // FUN の元の目的関数値を保持しつつ execSlots_ を確定して書き出す
-                auto writeGanttWithFunValues = [&](int idx, const string &suffix) {
-                    Solution *sol = pareto->get(idx);
-                    double funMs   = sol->getObjective(0);  // FUN に書いた値
-                    double funCost = sol->getObjective(1);
-                    prob->setOutputMaxShift(0);
-                    prob->evaluate(sol);                     // execSlots_ を確定
-                    prob->setOutputMaxShift(-1);
-                    // タイトルを FUN の値に戻す
-                    sol->setObjective(0, funMs);
-                    sol->setObjective(1, funCost);
-                    const string ganttPath = "GANTT_" + outPrefix + "_" + suffix + ".txt";
-                    runner.writeGanttFile(ganttPath, sol, prob, m);
-                };
-
-                writeGanttWithFunValues(minMsIdx, "MinMS");
-                if (minCostIdx != minMsIdx) {
-                    writeGanttWithFunValues(minCostIdx, "MinCost");
-                }
+            // サマリ集計
+            for (int i = 0; i < pareto->size(); ++i) {
+                minMs[enc]   = std::min(minMs[enc],   pareto->get(i)->getObjective(0));
+                minCost[enc] = std::min(minCost[enc], pareto->get(i)->getObjective(1));
             }
+            paretoSz[enc] = pareto->size();
 
             delete pareto;
             delete prob;
         }
+
+        // コンソールに比較サマリを表示
+        double dMs   = minMs[1]   - minMs[0];
+        double dCost = minCost[1] - minCost[0];
+        cout << left  << setw(14) << ctag
+             << right << setw(12) << (int)minMs[0]
+             << setw(14) << fixed << setprecision(1) << minCost[0]
+             << setw(12) << (int)minMs[1]
+             << setw(14) << fixed << setprecision(1) << minCost[1]
+             << setw(10) << (dMs >= 0 ? "+" : "") << (int)dMs
+             << setw(12) << (dCost >= 0 ? "+" : "") << setprecision(1) << dCost
+             << "\n";
     }
-    cout << "[BATCH] All conditions/modes done for " << prefix_ << "\n\n";
+
+    cout << string(88, '-') << "\n";
+    cout << "  ΔMS / ΔCost: MaxShift - SchedObj  (負 = MaxShift が優秀)\n";
+    cout << "[ALL DONE] " << prefix_ << "\n\n";
 }
 
 // ============================================================
@@ -582,26 +427,21 @@ int main(int argc, char **argv) {
         const string defaultInstance = "j30.sm/j301_1.sm";
         const string instanceFile = (argc >= 2) ? string(argv[1]) : defaultInstance;
 
-        NSGASplittingRunner::Config cfg;
+        EncodingComparisonRunner::Config cfg;
         cfg.instanceFile      = instanceFile;
-        cfg.rr                = 0.0;   // runAll() 内で条件を変える
+        cfg.rr                = 0.0;
         cfg.rv                = false;
         cfg.populationSize    = 100;
-        cfg.evalsPerStrategy  = 50000;
+        cfg.evalsPerStrategy  = 100000;
         cfg.numStrategies     = 4;
 
-        NSGASplittingRunner runner(cfg);
+        EncodingComparisonRunner runner(cfg);
         runner.runAll();
 
-        cout << "[ALL DONE]\n";
         return 0;
-
     } catch (const exception &e) {
         cerr << "[ERROR] " << e.what() << "\n";
         return 1;
     }
 }
-
-
-
 
