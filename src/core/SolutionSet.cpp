@@ -22,6 +22,7 @@
 
 
 #include <SolutionSet.h>
+#include <algorithm>
 
 
 /**
@@ -113,15 +114,11 @@ void SolutionSet::sort(Comparator * comparator){
     cout << "Error. No criterium for compare exist" << endl;
     exit(-1);
   } // if
-  for (int i = 0; i < solutionsList_.size(); i++) {
-    for (int j = i+1; j < solutionsList_.size(); j++) {
-      if ((comparator->compare(solutionsList_[i],solutionsList_[j]))==1) {
-        Solution *tmp = solutionsList_[i];
-        solutionsList_[i] = solutionsList_[j];
-        solutionsList_[j] = tmp;
-      }
-    }
-  } // At this point the solution set will be sorted
+  std::sort(solutionsList_.begin(), solutionsList_.end(),
+            [comparator](Solution *a, Solution *b) {
+                return comparator->compare(a, b) < 0;
+            });
+  // At this point the solution set will be sorted
 } // sort
 
 

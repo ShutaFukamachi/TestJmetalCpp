@@ -6,6 +6,7 @@
 
 
 #include "problems/RCPSP_Problem.h"
+#include "problems/RCPSP_Problem_MaxShift.h"
 
 NSGAII::NSGAII(Problem *problem)
     : Algorithm(problem),
@@ -61,6 +62,23 @@ SolutionSet *NSGAII::execute() {
             ++filled;
         }
         std::cout << "[NSGAII] Seeded " << filled << " solutions from initialPopulation\n";
+    }
+
+    // MaxShift エンコーディング用: 両端の極端解をシード挿入
+    // メイクスパン極端解 × 3 + コスト極端解 × 3
+    if (auto msProb = dynamic_cast<RCPSP_Problem_MaxShift*>(problem_)) {
+        const int nExtremes = 3;
+        for (int i = 0; i < nExtremes && filled < populationSize; ++i, ++filled) {
+            Solution *sol = msProb->createMakespanExtremeSolution();
+            problem_->evaluate(sol);
+            population->add(sol);
+        }
+        for (int i = 0; i < nExtremes && filled < populationSize; ++i, ++filled) {
+            Solution *sol = msProb->createCostExtremeSolution();
+            problem_->evaluate(sol);
+            population->add(sol);
+        }
+        std::cout << "[NSGAII] Injected " << (nExtremes * 2) << " extreme seed solutions\n";
     }
 
     //ランダムトポロジカルソートで生成

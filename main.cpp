@@ -18,6 +18,7 @@
 //    例: NSGAEncCpp j30.sm/j301_1.sm
 // ============================================================
 
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -436,7 +437,10 @@ int main(int argc, char **argv) {
         cfg.numStrategies     = 4;
 
         EncodingComparisonRunner runner(cfg);
+        auto t0 = std::chrono::steady_clock::now();
         runner.runAll();
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        cout << "[TIME] " << elapsed << " s\n";
 
         return 0;
     } catch (const exception &e) {
