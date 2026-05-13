@@ -1,0 +1,29 @@
+# ビルド成果物
+cmake-build-debug/
+cmake-build-release/
+*.exe
+*.ilk
+*.pdb
+*.obj
+*.o
+
+# JVM クラッシュログ
+hs_err_pid*.log
+
+# Claude Code メモリ
+.claude/
+
+# 実行結果ファイル
+FUN_*.txt
+SCHED_*.txt
+VAR_*.txt
+costs*.csv
+figures/
+
+# IDE
+.idea/
+*.user
+
+# バックアップファイル
+*控え*
+卒論*/
