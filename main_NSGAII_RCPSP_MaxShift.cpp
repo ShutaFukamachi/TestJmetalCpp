@@ -312,6 +312,121 @@ static bool runUnitTests(const string &instanceFile) {
 
 
 // ============================================================
+//  タスク2: スケジューリング動作確認
+//  同一活動リストで max_shift=0 と max_shift=T/4 を比較し、
+//  schedule_comparison.txt に出力する。
+//
+//  確認ポイント:
+//   - max_shift=0 でも EST より遅い開始のジョブがあるか？
+//     → あれば資源制約による遅延（正常）
+//   - makespan・cost はどう違うか？
+// ============================================================
+static void task2_scheduleComparison(const string &instanceFile) {
+    cout << "\n[Task 2] Schedule comparison: max_shift=0 vs max_shift=T/4\n";
+
+    RCPSP_Problem_MaxShift prob(instanceFile);
+    const int n     = prob.getNumJobs();
+    const int nVar  = prob.getNumberOfVariables();
+    const int T     = prob.getHorizon();
+    const int halfT = max(1, T / 4);
+
+    // --- 活動リストを共有する2解を生成 ---
+    Solution *solA = prob.createRandomTopoSolution();
+    Variable **varsA = solA->getDecisionVariables();
+    // max_shift = 0 （最早配置）
+    for (int j = 0; j < n && n + j < nVar; ++j)
+        varsA[n + j]->setValue(0.0);
+    prob.evaluate(solA);
+
+    Solution *solB = new Solution(solA);   // 活動リストをコピー
+    Variable **varsB = solB->getDecisionVariables();
+    // max_shift = T/4 （コスト最小探索）、ダミー端点は 0 のまま
+    for (int j = 1; j < n - 1 && n + j < nVar; ++j)
+        varsB[n + j]->setValue(static_cast<double>(halfT));
+    prob.evaluate(solB);
+
+    // --- EST（先行制約のみ、資源無視）を計算 ---
+    vector<vector<int>> preds(n);
+    const auto &succ = prob.getSuccessors();
+    for (int j = 0; j < n; ++j)
+        for (int s : succ[j])
+            if (s >= 0 && s < n) preds[s].push_back(j);
+
+    const auto &dur = prob.getDurations();
+    vector<int> estPred(n, 0);  // 先行制約だけの EST
+    {
+        // 活動リスト順に EST を計算
+        vector<int> finPred(n, 0);
+        for (int pos = 0; pos < n; ++pos) {
+            int j = static_cast<int>(varsA[pos]->getValue());
+            int e = 0;
+            for (int p : preds[j]) e = max(e, finPred[p]);
+            estPred[j] = e;
+            finPred[j] = e + dur[j];
+        }
+    }
+
+    // --- ファイル出力 ---
+    ofstream out("schedule_comparison.txt");
+    out << "======================================================\n";
+    out << " Schedule Comparison (Task 2 Diagnostic)\n";
+    out << " Instance: " << instanceFile << "\n";
+    out << " n=" << n << "  T=" << T << "  T/4=" << halfT << "\n";
+    out << "======================================================\n\n";
+
+    auto writeSchedule = [&](const string &label, Solution *sol,
+                              const string &shiftLabel) {
+        out << "--- " << label << " ---\n";
+        out << "Makespan : " << static_cast<int>(sol->getObjective(0)) << "\n";
+        out << "Cost     : " << fixed << setprecision(2) << sol->getObjective(1) << "\n\n";
+        out << setw(5) << "job" << setw(8) << "dur"
+            << setw(8) << "EST_pred" << setw(8) << "t_mak" << setw(8) << "delay\n";
+        out << string(37, '-') << "\n";
+
+        bool hasAnomaly = false;
+        for (int j = 0; j < n; ++j) {
+            if (dur[j] <= 0) continue;
+            int tMak  = (j < static_cast<int>(sol->startTimes_.size())) ? sol->startTimes_[j] : -1;
+            int delay = tMak - estPred[j];
+            out << setw(5) << j
+                << setw(8) << dur[j]
+                << setw(8) << estPred[j]
+                << setw(8) << tMak
+                << setw(8) << delay;
+            if (delay > 0) { out << "  <- resource delay"; hasAnomaly = true; }
+            out << "\n";
+        }
+        if (!hasAnomaly)
+            out << "(全ジョブが EST_pred に配置。資源制約は非アクティブ)\n";
+        out << "\n";
+    };
+
+    writeSchedule("max_shift = 0 (最早配置)", solA, "0");
+    writeSchedule("max_shift = T/4 (コスト探索)", solB, to_string(halfT));
+
+    // --- コスト改善量の比較 ---
+    double costA = solA->getObjective(1);
+    double costB = solB->getObjective(1);
+    int    msA   = static_cast<int>(solA->getObjective(0));
+    int    msB   = static_cast<int>(solB->getObjective(0));
+    out << "--- 比較サマリ ---\n";
+    out << "makespan:  " << msA << " -> " << msB
+        << "  (diff=" << (msB - msA) << ")\n";
+    out << "cost:      " << fixed << setprecision(2) << costA
+        << " -> " << costB
+        << "  (diff=" << (costB - costA) << ")\n";
+    out << (costB < costA ? "max_shift=T/4 がコストを削減できている\n"
+                          : "max_shift=T/4 でもコスト削減なし（注意）\n");
+    out << (msB > msA ? "max_shift=T/4 で makespan が増加した\n"
+                      : "max_shift=T/4 でも makespan は同等\n");
+
+    cout << "[Task 2] -> schedule_comparison.txt\n";
+    delete solA;
+    delete solB;
+}
+
+
+// ============================================================
 //  NSGAMaxShiftRunner
 // ============================================================
 class NSGAMaxShiftRunner {
@@ -461,6 +576,22 @@ SolutionSet* NSGAMaxShiftRunner::run() const {
                 cout << "    Pareto front size: " << f0->size() << "\n";
                 for (int i = 0; i < f0->size(); ++i)
                     combined->add(new Solution(f0->get(i)));
+
+                // [Root Cause Fix] 進化した活動リストに max_shift=0 を適用した解を注入。
+                // 問題: NSGA-II は活動リストとmax_shiftを同時に進化させるが、
+                //   「良い活動リスト × max_shift=0」の組み合わせは直接生成されにくい。
+                //   コスト最適化で発達した活動リストに max_shift=0 をかけると
+                //   その活動リストのmakespan下限を取得でき、パレートフロントの
+                //   makespan最小側を補強できる。
+                prob->setOutputMaxShift(0);
+                for (int i = 0; i < f0->size(); ++i) {
+                    Solution *copy = new Solution(f0->get(i));
+                    prob->evaluate(copy);
+                    combined->add(copy);
+                }
+                prob->setOutputMaxShift(-1);
+                cout << "    Injected " << f0->size()
+                     << " max_shift=0 versions for makespan side\n";
             }
         }
         delete pop;
@@ -660,6 +791,21 @@ void NSGAMaxShiftRunner::runAll() const {
         {0.75, false}, {0.75, true },
     };
 
+    // ---- タスク3d: 初期個体（全max_shift=0）のガントチャートを出力 ----
+    // 進化前の「最早配置のみ」解を基準として可視化する。
+    {
+        RCPSP_Problem_MaxShift *prob0 = makeProblem(1);
+        Solution *initSol = prob0->createMakespanExtremeSolution();
+        prob0->evaluate(initSol);
+        const string ganttInitPath = "GANTT_MS_" + prefix_ + "_initial_allzero.txt";
+        writeGanttFile(ganttInitPath, initSol, prob0);
+        cout << "[Task3d] Initial all-zero Gantt: ms="
+             << static_cast<int>(initSol->getObjective(0))
+             << "  cost=" << fixed << setprecision(2) << initSol->getObjective(1) << "\n";
+        delete initSol;
+        delete prob0;
+    }
+
     for (const auto &c : conditions) {
         RCPSP_Problem::resetGlobalCostSeries();
         if (fileExists(costsFile)) copyFileBinary(costsFile, "costs.csv");
@@ -690,15 +836,13 @@ void NSGAMaxShiftRunner::runAll() const {
                 if (cost < minCost) { minCost = cost; minCostIdx = i; }
             }
 
+            // [Bug Fix Task3] evaluate()によるstartTimes_の上書きを廃止。
+            // Solution のコピーコンストラクタが startTimes_/execSlots_ を保持しているため
+            // 再評価は不要。setOutputMaxShift(0) で上書きすると MinCost の
+            // ガントチャートが実際のコスト最適スケジュールではなく EST スケジュールに
+            // なってしまうバグがあった。
             auto writeGanttWithFunValues = [&](int idx, const string &suffix) {
                 Solution *sol = pareto->get(idx);
-                double funMs   = sol->getObjective(0);
-                double funCost = sol->getObjective(1);
-                prob->setOutputMaxShift(0);
-                prob->evaluate(sol);
-                prob->setOutputMaxShift(-1);
-                sol->setObjective(0, funMs);
-                sol->setObjective(1, funCost);
                 const string ganttPath = "GANTT_MS_" + outPrefix + "_" + suffix + ".txt";
                 runner.writeGanttFile(ganttPath, sol, prob);
             };
@@ -727,6 +871,9 @@ int main(int argc, char **argv) {
         if (!testsOk) {
             cerr << "[WARN] Some unit tests FAILED. Continuing with main run...\n\n";
         }
+
+        // ---- タスク2: スケジューリング動作確認 ----
+        task2_scheduleComparison(instanceFile);
 
         // ---- NSGA-II 実行 ----
         NSGAMaxShiftRunner::Config cfg;

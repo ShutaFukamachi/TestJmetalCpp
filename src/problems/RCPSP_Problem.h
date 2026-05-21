@@ -58,7 +58,7 @@ public:
 
     // [追加] 時間依存容量テーブルを（再）生成する
     //   コンストラクタが自動で呼ぶが、後から呼び直すことも可能
-    void buildTimeVaryingCapacity(double rr, bool rv);
+    void buildTimeVaryingCapacity(double rr, bool rv, uint32_t seed);
 
     // P1/P2/P3 インスタンス間で同一の capacity_t を共有するためのセッター
     // 外部で生成した capacity_t をそのままセットする（コピー渡し）
@@ -73,7 +73,7 @@ public:
     static bool writeGlobalCostSeriesCSV(const std::string &filename);
 
     // 戦略切り替え・カウンタリセット（4戦略独立実行用）
-    void setStrategy(int s)      { strategy_    = s; }
+    virtual void setStrategy(int s) { strategy_ = s; }
     void resetEvalCounter()      { evalCounter_ = 0; }
     void clearStartTimesCache()  { startTimesCache_.clear(); }
 

@@ -4,6 +4,7 @@
 #include "Variable.h"
 
 #include <algorithm>
+#include <functional>
 #include <numeric>
 #include <random>
 #include <limits>
@@ -363,7 +364,12 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
     //   rr=0.0 かつ rv=false → capacity_t は空 → 既存通り capacity[k] 使用
     // ============================================================
     if (rr > 0.0 || rv) {
-        buildTimeVaryingCapacity(rr, rv);
+        // シードをインスタンスファイル名 + rr + rv から決定論的に導出する。
+        // 同一パラメータなら常に同一の capacity_t を生成する（再現性保証）。
+        size_t h = std::hash<std::string>{}(filename);
+        h ^= std::hash<double>{}(rr)  + 0x9e3779b9u + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(rv ? 1 : 0) + 0x9e3779b9u + (h << 6) + (h >> 2);
+        buildTimeVaryingCapacity(rr, rv, static_cast<uint32_t>(h));
     }
 
     std::cout << "[RCPSP_Problem] nJobs=" << instance.nJobs
@@ -384,7 +390,7 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
 //   Step7: rv=true のとき MOD(t,14)==vacDay を容量0にする
 //     vacDay は rn<0.5 なら 0、そうでなければ 7（論文 Step7 通り）
 // ============================================================
-void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv) {
+void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv, uint32_t seed) {
     int nRes = instance.nRes;
 
     // ホライゾン T = 全 duration の合計 × 余裕係数
@@ -397,8 +403,8 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv) {
     T = static_cast<int>(T * factor) + 20;
     if (T <= 0) T = 100;
 
-    // 毎回異なる乱数列を使う
-    static thread_local std::mt19937 capRng(std::random_device{}());
+    // 決定論的シード（呼び出し元がインスタンスパラメータから算出）
+    std::mt19937 capRng(seed);
 
     instance.capacity_t.assign(nRes, std::vector<int>(T, 0));
 

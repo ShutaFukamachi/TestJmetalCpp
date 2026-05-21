@@ -31,8 +31,8 @@ void * MaxShiftCrossover::execute(void * object) {
     // 交叉しない場合は複製して返す
     if (prob01(gen) > probability) {
         Solution **offs = new Solution*[2];
-        offs[0] = new Solution(*p1);
-        offs[1] = new Solution(*p2);
+        offs[0] = new Solution(p1);
+        offs[1] = new Solution(p2);
         return (void*)offs;
     }
 
@@ -114,8 +114,8 @@ void * MaxShiftCrossover::execute(void * object) {
     auto [alB, msB] = make_child(father, fShift, mother, mShift, father, fShift);
 
     Solution **offspring = new Solution*[2];
-    offspring[0] = new Solution(*p1);
-    offspring[1] = new Solution(*p2);
+    offspring[0] = new Solution(p1);
+    offspring[1] = new Solution(p2);
 
     for (int i = 0; i < nJobs; ++i) {
         offspring[0]->getDecisionVariables()[i]->setValue(alA[i]);

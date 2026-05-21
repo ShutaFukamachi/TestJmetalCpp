@@ -80,8 +80,10 @@ void * MaxShiftMutation::execute(void * object) {
     // 第2段階: max_shift の変異（ゼロリセット付き）
     //   ダミー端点は変異しない
     //   確率 probability で変異発生 → さらに:
-    //     zeroResetProb (50%) : max_shift を 0 にリセット
-    //     残り (50%)          : Uniform[0, T/4] から再サンプリング
+    //     zeroResetProb (70%) : max_shift を 0 にリセット
+    //     残り (30%)          : Uniform[0, T/4] から再サンプリング
+    //   ※ zeroResetProb の実際の値は MaxShiftMutation.h の
+    //     メンバ変数初期値 (= 0.70) が適用される。
     // ========================================================
     std::uniform_int_distribution<int> ms_dist(0, halfT_);
     for (int j = 1; j < nJobs - 1; ++j) {

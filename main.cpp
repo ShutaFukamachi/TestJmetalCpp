@@ -45,6 +45,7 @@
 #include "operators/mutation/MaxShiftMutation.h"
 #include "operators/selection/BinaryTournament2.h"
 #include "util/Ranking.h"
+#include "problems/MaxShiftSensitivity.h"
 
 using namespace std;
 
@@ -55,11 +56,12 @@ class EncodingComparisonRunner {
 public:
     struct Config {
         string instanceFile;
-        double rr              = 0.0;
-        bool   rv              = false;
-        int    populationSize  = 100;
-        int    evalsPerStrategy = 50000;
-        int    numStrategies   = 4;
+        double rr                   = 0.0;
+        bool   rv                   = false;
+        int    populationSize       = 100;
+        int    evalsPerStrategy     = 50000;
+        int    numStrategiesSchedObj = 4;  // enc=0 用: strategy 1-4 を使用
+        int    numStrategiesMaxShift = 4;  // enc=1 用: strategy 1-4 (S1=0, S2=T/8, S3=T/4, S4=T/2)
     };
 
     explicit EncodingComparisonRunner(Config cfg)
@@ -155,12 +157,14 @@ SolutionSet* EncodingComparisonRunner::runEncoding(int enc) const {
     const string encTag = (enc == 0) ? "SchedObj" : "MaxShift";
     const string ctag   = toCondTag(cfg_.rr, cfg_.rv);
 
+    const int numStr = (enc == 0) ? cfg_.numStrategiesSchedObj : cfg_.numStrategiesMaxShift;
+
     cout << "\n------------------------------------------------------------\n";
     cout << "[Encoding=" << encTag << "] " << ctag
          << "  instance=" << cfg_.instanceFile << "\n";
     cout << "  popSize=" << cfg_.populationSize
          << "  evalsPerStrategy=" << cfg_.evalsPerStrategy
-         << "  numStrategies=" << cfg_.numStrategies << "\n";
+         << "  numStrategies=" << numStr << "\n";
     cout << "------------------------------------------------------------\n";
 
     // 問題インスタンスを生成（両エンコーディングとも nVars=2n）
@@ -176,12 +180,10 @@ SolutionSet* EncodingComparisonRunner::runEncoding(int enc) const {
         prob = probMS;
     }
 
-    SolutionSet *combined = new SolutionSet(
-            cfg_.numStrategies * cfg_.populationSize * 4);
+    SolutionSet *combined = new SolutionSet(numStr * cfg_.populationSize * 4);
 
-    for (int s = 1; s <= cfg_.numStrategies; ++s) {
-        cout << "  [" << encTag << " Strategy " << s << "/"
-             << cfg_.numStrategies << "]\n";
+    for (int s = 1; s <= numStr; ++s) {
+        cout << "  [" << encTag << " Strategy " << s << "/" << numStr << "]\n";
 
         prob->setStrategy(s);
         prob->resetEvalCounter();
@@ -349,7 +351,8 @@ void EncodingComparisonRunner::runAll() const {
     cout << " Instance : " << cfg_.instanceFile << "\n";
     cout << " popSize=" << cfg_.populationSize
          << "  evalsPerStrategy=" << cfg_.evalsPerStrategy
-         << "  numStrategies=" << cfg_.numStrategies << "\n";
+         << "  numStrategiesSchedObj=" << cfg_.numStrategiesSchedObj
+         << "  numStrategiesMaxShift=" << cfg_.numStrategiesMaxShift << "\n";
     cout << "============================================================\n";
 
     // 比較サマリ用テーブル（コンソール出力）
@@ -429,12 +432,19 @@ int main(int argc, char **argv) {
         const string instanceFile = (argc >= 2) ? string(argv[1]) : defaultInstance;
 
         EncodingComparisonRunner::Config cfg;
-        cfg.instanceFile      = instanceFile;
-        cfg.rr                = 0.0;
-        cfg.rv                = false;
-        cfg.populationSize    = 100;
-        cfg.evalsPerStrategy  = 100000;
-        cfg.numStrategies     = 4;
+        cfg.instanceFile           = instanceFile;
+        cfg.rr                     = 0.0;
+        cfg.rv                     = false;
+        cfg.populationSize         = 100;
+        cfg.evalsPerStrategy       = 100000;
+        cfg.numStrategiesSchedObj  = 4;  // S1..S4 (既存の SchedObj strategy)
+        cfg.numStrategiesMaxShift  = 4;  // S1=upper=0, S2=T/8, S3=T/4, S4=T/2
+
+        // ---- 感度分析（MaxShift 上限 T/4 の妥当性検証） ----
+        {
+            MaxShiftSensitivityAnalyzer sa(instanceFile, 0.0, false);
+            sa.runAndSave("maxshift_sensitivity_RR000_RV0.csv", 40);
+        }
 
         EncodingComparisonRunner runner(cfg);
         auto t0 = std::chrono::steady_clock::now();

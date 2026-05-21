@@ -1,8 +1,13 @@
 #include "NSGAII.h"
 #include "Ranking.h"
 #include "CrowdingDistanceComparator.h"
+#include <algorithm>
 #include <iostream>
+#include <fstream>
+#include <limits>
+#include <random>
 #include <stdexcept>
+#include <vector>
 
 
 #include "problems/RCPSP_Problem.h"
@@ -25,6 +30,20 @@ SolutionSet *NSGAII::execute() {
     crossoverOperator = getOperator("crossover");
     mutationOperator  = getOperator("mutation");
     selectionOperator = getOperator("selection");
+
+    // ---- A/B: makespan エリート保存・交叉バイアス パラメータ読み込み ----
+    // eliteMakespanSlots : 毎世代必ず残す makespan 最小解の数 (デフォルト 2)
+    // makespanBiasProb   : 交叉時に片親を makespan 最小解に固定する確率 (デフォルト 0.10)
+    int    eliteMakespanSlots = 2;
+    double makespanBiasProb   = 0.10;
+    {
+        void *p = getInputParameter("eliteMakespanSlots");
+        if (p) eliteMakespanSlots = *static_cast<int *>(p);
+        p = getInputParameter("makespanBiasProb");
+        if (p) makespanBiasProb = *static_cast<double *>(p);
+    }
+    static thread_local std::mt19937 rng_ms{std::random_device{}()};
+    std::uniform_real_distribution<> d01_ms(0.0, 1.0);
 
     // 追加: 初期個体のポインタを取得（渡されていなければ nullptr）
     SolutionSet *seedPopulation = nullptr;
@@ -97,6 +116,24 @@ SolutionSet *NSGAII::execute() {
 
     evaluations = population->size();
 
+    // ---- タスク1: 世代ログ準備 (MaxShift 診断) ----
+    // generation_log.csv に append。4戦略分が同一ファイルに蓄積される。
+    // run_id は静的カウンタで管理し、ヘッダーは最初の1回のみ書く。
+    static int  sRunId         = 0;
+    static bool sHeaderWritten = false;
+    ++sRunId;
+    const bool msMode = (dynamic_cast<RCPSP_Problem_MaxShift*>(problem_) != nullptr);
+    int genCount = 0;
+    std::ofstream genLog;
+    if (msMode) {
+        genLog.open("generation_log.csv",
+                    sRunId == 1 ? std::ios::trunc : std::ios::app);
+        if (!sHeaderWritten && genLog.is_open()) {
+            genLog << "run_id,generation,avg_max_shift,min_makespan_in_front,"
+                      "count_all_zero_shift,min_max_shift,max_max_shift\n";
+            sHeaderWritten = true;
+        }
+    }
 
     // メインループ
 
@@ -108,8 +145,23 @@ SolutionSet *NSGAII::execute() {
 
         offspringPopulation = new SolutionSet(populationSize);
 
+        // ---- B: 交叉バイアス用 - 今世代の makespan 最小解を探索 ----
+        Solution *makespanMinSol = nullptr;
+        if (msMode && makespanBiasProb > 0.0) {
+            double minMs = std::numeric_limits<double>::max();
+            for (int i = 0; i < population->size(); ++i) {
+                double ms = population->get(i)->getObjective(0);
+                if (ms < minMs) { minMs = ms; makespanMinSol = population->get(i); }
+            }
+        }
+
         for (int i = 0; i < populationSize && evaluations < maxEvaluations; i += 2) {
-            Solution *p1 = (Solution *)selectionOperator->execute(population);
+            // ---- B: makespan 最小解を親の一方に固定（確率 makespanBiasProb）----
+            Solution *p1;
+            if (msMode && makespanMinSol && d01_ms(rng_ms) < makespanBiasProb)
+                p1 = makespanMinSol;
+            else
+                p1 = (Solution *)selectionOperator->execute(population);
             Solution *p2 = (Solution *)selectionOperator->execute(population);
 
             void **parents = new void*[2];
@@ -188,6 +240,48 @@ SolutionSet *NSGAII::execute() {
             ++idx;
         }
 
+        // ---- A: エリート保存 - makespan 最小解を nextGen に強制保存 ----
+        // unionPopulation 削除前に実行する必要がある
+        if (msMode && eliteMakespanSlots > 0) {
+            // unionPopulation から makespan 昇順でソートし上位候補を取得
+            std::vector<std::pair<double, Solution *>> cands;
+            cands.reserve(unionPopulation->size());
+            for (int i = 0; i < unionPopulation->size(); ++i) {
+                Solution *s = unionPopulation->get(i);
+                cands.push_back({s->getObjective(0), s});
+            }
+            std::sort(cands.begin(), cands.end());
+
+            // nextGen でカバーされていない候補（より小さい makespan を持つ）を収集
+            std::vector<Solution *> toInject;
+            for (int e = 0; e < eliteMakespanSlots && e < (int)cands.size(); ++e) {
+                double eliteMs = cands[e].first;
+                bool covered = false;
+                for (int k = 0; k < nextGen->size(); ++k) {
+                    if (nextGen->get(k)->getObjective(0) <= eliteMs) {
+                        covered = true;
+                        break;
+                    }
+                }
+                if (!covered) toInject.push_back(cands[e].second);
+            }
+
+            // 注入が必要な場合: nextGen の末尾（NSGA-II 優先度が最低の解）と入れ替え
+            if (!toInject.empty()) {
+                int injectCount = (int)toInject.size();
+                int keep = populationSize - injectCount;
+                SolutionSet *newNextGen = new SolutionSet(populationSize);
+                // 先頭 keep 個はそのまま保持（NSGA-II ランク・crowding 優先順）
+                for (int k = 0; k < keep && k < nextGen->size(); ++k)
+                    newNextGen->add(new Solution(nextGen->get(k)));
+                // makespan エリートを追加
+                for (Solution *e : toInject)
+                    newNextGen->add(new Solution(e));
+                delete nextGen;
+                nextGen = newNextGen;
+            }
+        }
+
         delete unionPopulation;
         unionPopulation = nullptr;
 
@@ -197,7 +291,45 @@ SolutionSet *NSGAII::execute() {
         delete population;
 
         population = nextGen;
-        // offspringPopulation / unionPopulation のポインタは上書きしているだけ
+
+        // ---- タスク1: 世代ごとの統計をログ ----
+        if (msMode && genLog.is_open()) {
+            ++genCount;
+            auto *msProb = dynamic_cast<RCPSP_Problem_MaxShift*>(problem_);
+            const int nJobs = msProb->getNumJobs();
+            const int popSz = population->size();
+            const int innerJobs = std::max(1, nJobs - 2);  // ダミー端点除く
+
+            double sumShift  = 0.0;
+            int    minShift  = std::numeric_limits<int>::max();
+            int    maxShift  = std::numeric_limits<int>::min();
+            int    cntAllZero = 0;
+            double minMakespan = std::numeric_limits<double>::max();
+
+            for (int i = 0; i < popSz; ++i) {
+                Solution  *s    = population->get(i);
+                Variable **vars = s->getDecisionVariables();
+                bool allZero = true;
+                for (int j = 1; j < nJobs - 1; ++j) {
+                    int v = static_cast<int>(vars[nJobs + j]->getValue());
+                    sumShift += v;
+                    if (v < minShift) minShift = v;
+                    if (v > maxShift) maxShift = v;
+                    if (v != 0) allZero = false;
+                }
+                if (allZero) ++cntAllZero;
+                double ms = s->getObjective(0);
+                if (ms < minMakespan) minMakespan = ms;
+            }
+
+            // 母集団中の makespan 最小 = パレートフロント上の makespan 最小
+            // （最小 makespan 解を支配できる解は存在しないため）
+            double avgShift = sumShift / static_cast<double>(popSz * innerJobs);
+            genLog << sRunId << "," << genCount << "," << avgShift << ","
+                   << static_cast<int>(minMakespan) << "," << cntAllZero << ","
+                   << minShift << "," << maxShift << "\n";
+            genLog.flush();
+        }
     }
     setOutputParameter("evaluations", &evaluations);
     return population;

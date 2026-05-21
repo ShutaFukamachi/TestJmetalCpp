@@ -15,14 +15,45 @@
 //   vars[n..2n-1] の上限を T/2 に更新する。
 //   （基底クラスは schedObj 用に upperLimit_=1 にしているため）
 // ============================================================
+// ============================================================
+//  getEffectiveHalfT
+//   strategy に対応する max_shift 上限を返す。
+// ============================================================
+int RCPSP_Problem_MaxShift::getEffectiveHalfT() const {
+    int T = getHorizon();
+    switch (strategy_) {
+        case 1: return 0;                       // EST 固定
+        case 2: return std::max(1, T / 8);      // 軽微コスト探索
+        case 3: return std::max(1, T / 4);      // 中程度（デフォルト）
+        case 4: return std::max(1, T / 2);      // 積極的コスト探索
+        default: return std::max(1, T / 4);
+    }
+}
+
+// ============================================================
+//  setStrategy
+//   strategy を変更し、vars[n..2n-1] の上限も更新する。
+// ============================================================
+void RCPSP_Problem_MaxShift::setStrategy(int s) {
+    strategy_ = s;
+    int halfT = getEffectiveHalfT();
+    int n = getNumJobs();
+    for (int i = n; i < 2 * n; ++i) {
+        upperLimit_[i] = (double)halfT;
+    }
+}
+
+// ============================================================
+//  コンストラクタ
+// ============================================================
 RCPSP_Problem_MaxShift::RCPSP_Problem_MaxShift(
         const std::string &filename, int strategy, double rr, bool rv)
     : RCPSP_Problem(filename, strategy, rr, rv)
 {
     int n     = getNumJobs();
-    int halfT = std::max(1, getHorizon() / 4);
+    int halfT = getEffectiveHalfT();  // strategy 依存の上限
 
-    // vars[n..2n-1] の変数上限を T/4 に更新
+    // vars[n..2n-1] の変数上限を strategy に応じた値に更新
     for (int i = n; i < 2 * n; ++i) {
         upperLimit_[i] = (double)halfT;
     }
@@ -73,11 +104,11 @@ void RCPSP_Problem_MaxShift::evaluate(Solution *solution) {
 
     // ---- 2. ホライゾン T ----
     const int T     = getHorizon();
-    const int halfT = std::max(1, T / 4);
+    const int halfT = getEffectiveHalfT();  // strategy 依存の上限 (0/T/8/T/4/T/2)
 
     // ---- 3. max_shift 取得 ----
-    //   outputMaxShift_ >= 0 のとき: 出力用固定値（ESS 再評価など）
-    //   それ以外            : vars[n+j] から直接読み取り [0, T/4] にクリップ
+    //   outputMaxShift_ >= 0 のとき: 出力用固定値（感度分析・再評価など）
+    //   それ以外            : vars[n+j] から直接読み取り [0, halfT] にクリップ
     std::vector<int> maxShift(n, 0);
     if (outputMaxShift_ >= 0) {
         std::fill(maxShift.begin(), maxShift.end(), outputMaxShift_);
@@ -262,7 +293,7 @@ Solution* RCPSP_Problem_MaxShift::createMakespanExtremeSolution() {
 Solution* RCPSP_Problem_MaxShift::createCostExtremeSolution() {
     const int n     = getNumJobs();
     const int nVars = getNumberOfVariables();
-    const int halfT = std::max(1, getHorizon() / 4);
+    const int halfT = getEffectiveHalfT();  // strategy 依存の上限
 
     Solution *sol   = new Solution(this);
     Variable **vars = sol->getDecisionVariables();
@@ -293,7 +324,7 @@ Solution* RCPSP_Problem_MaxShift::createRandomTopoSolution() {
     const int n     = getNumJobs();
     const int nVars = getNumberOfVariables();
     const int T     = getHorizon();
-    const int halfT = std::max(1, T / 4);
+    const int halfT = getEffectiveHalfT();  // strategy 依存の上限
 
     Solution *sol = new Solution(this);
     Variable **vars = sol->getDecisionVariables();
@@ -302,7 +333,7 @@ Solution* RCPSP_Problem_MaxShift::createRandomTopoSolution() {
     static thread_local std::mt19937 msRng{std::random_device{}()};
     buildRandomTopo(n, instance.successors, vars, msRng);
 
-    // ---- max_shift: バイアス付き初期化（makespan 側への偏りを導入） ----
+
     //
     //   解ごとに以下の確率でグループを選択する:
     //     30%: Extreme Makespan Priority  → 全ジョブ max_shift = 0

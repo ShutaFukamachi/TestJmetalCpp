@@ -58,6 +58,19 @@ public:
     int getHorizon() const;
 
     // ----------------------------------------------------------------
+    //  getEffectiveHalfT
+    //   strategy に応じた max_shift 上限を返す。
+    //     strategy=1 → 0      (EST 固定, makespan 専用)
+    //     strategy=2 → T/8    (軽微コスト探索)
+    //     strategy=3 → T/4    (中程度, デフォルト)
+    //     strategy=4 → T/2    (積極的コスト探索)
+    // ----------------------------------------------------------------
+    int getEffectiveHalfT() const;
+
+    // strategy を変更し、変数上限 (vars[n..2n-1]) も同時に更新する。
+    void setStrategy(int s) override;
+
+    // ----------------------------------------------------------------
     //  verifySchedule
     //   evaluate() が生成したスケジュールの先行制約・資源制約を検証する。
     //   違反があれば標準エラーに詳細を出力し false を返す。

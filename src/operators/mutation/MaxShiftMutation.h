@@ -56,8 +56,7 @@ public:
         if (!prob)
             throw std::runtime_error("MaxShiftMutation: null problem");
         build_lists(prob, succs_, preds_);
-        int T = prob->getHorizon();
-        halfT_ = std::max(1, T / 4);
+        halfT_ = prob->getEffectiveHalfT();  // strategy 依存の上限
     }
 
     void * execute(void * object) override;
