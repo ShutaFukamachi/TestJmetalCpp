@@ -115,11 +115,33 @@ vars[n..2n-1]  : スケジューリング制御変数（下記2種）
 |---|---|
 | ベンチマーク | PSPLIB（j30 / j60 / j90 / j120） |
 | 集団サイズ | 100 |
-| 評価回数/ストラテジー | 50,000〜100,000 |
+| 評価回数/ストラテジー | 50,000（本番: 100,000） |
 | ストラテジー数 | 4（結果統合） |
 | RR 条件 | 0.00 / 0.25 / 0.50 / 0.75 |
 | RV 条件 | off / on |
 | 比較エンコーディング | SchedObj vs MaxShift |
+| 作業分割モード | P1 / P2 / P3（全モード比較） |
+
+---
+
+## ランナークラス
+
+`main.cpp` には 2 種類のランナークラスが定義されている。
+
+| クラス | 説明 |
+|---|---|
+| `EncodingComparisonRunner_P1` | P1（分割なし）のみで SchedObj vs MaxShift を比較（旧来動作） |
+| `EncodingComparisonRunner_All` | P1/P2/P3 それぞれで SchedObj vs MaxShift を比較 |
+
+現在 `main()` は **`EncodingComparisonRunner_All`** を使用し，実行前に `MaxShiftSensitivityAnalyzer` による感度分析も行う。
+
+### 問題クラス対応表
+
+| 作業分割モード | SchedObj | MaxShift |
+|---|---|---|
+| P1（分割なし） | `RCPSP_Problem` | `RCPSP_Problem_MaxShift` |
+| P2（資源不足時のみ中断） | `RCPSP_Problem_Splitting(P2)` | `RCPSP_Problem_Splitting_MaxShift(P2)` |
+| P3（任意中断・再開） | `RCPSP_Problem_Splitting(P3)` | `RCPSP_Problem_Splitting_MaxShift(P3)` |
 
 ---
 
@@ -139,16 +161,27 @@ python ../visualize_encoding_comparison.py --dir . --prefix j301_1
 
 ### 出力ファイル
 
+実行時は **`EncodingComparisonRunner_All`**（P1/P2/P3 全比較）が使われるため，ファイル名には分割モード名（`_P1_`, `_P2_`, `_P3_`）が付く。
+
 | ファイル | 内容 |
 |---|---|
-| `FUN_ENC_<prefix>_<cond>_SchedObj.txt` | SchedObj パレートフロント（makespan, cost） |
-| `FUN_ENC_<prefix>_<cond>_MaxShift.txt` | MaxShift パレートフロント（makespan, cost） |
-| `SCHED_ENC_*.txt` | 各解のスケジュール（開始時刻） |
+| `FUN_ENC_<prefix>_<cond>_P1_SchedObj.txt` | P1+SchedObj パレートフロント（makespan, cost） |
+| `FUN_ENC_<prefix>_<cond>_P1_MaxShift.txt` | P1+MaxShift パレートフロント |
+| `FUN_ENC_<prefix>_<cond>_P2_SchedObj.txt` | P2+SchedObj パレートフロント |
+| `FUN_ENC_<prefix>_<cond>_P2_MaxShift.txt` | P2+MaxShift パレートフロント |
+| `FUN_ENC_<prefix>_<cond>_P3_SchedObj.txt` | P3+SchedObj パレートフロント |
+| `FUN_ENC_<prefix>_<cond>_P3_MaxShift.txt` | P3+MaxShift パレートフロント |
+| `SCHED_ENC_<prefix>_<cond>_<mode>_<enc>.txt` | 各解のスケジュール（開始時刻） |
+| `maxshift_sensitivity_RR000_RV0.csv` | MaxShift 上限 T/4 妥当性検証の感度分析結果 |
 | `figures/encoding_cmp_*.png` | パレートフロント比較グラフ |
+
+`EncodingComparisonRunner_P1` を単独で使用した場合のファイル名は `FUN_ENC_<prefix>_<cond>_SchedObj.txt`（モード名なし）。
 
 ---
 
 ## 実装
+
+### ディレクトリ構造
 
 | ディレクトリ | 内容 |
 |---|---|
@@ -157,3 +190,83 @@ python ../visualize_encoding_comparison.py --dir . --prefix j301_1
 | `src/metaheuristics/` | NSGA-II，Branch and Bound |
 | `src/operators/` | 交叉・変異・選択オペレータ |
 | `src/util/` | 非支配ソート，Crowding Distance，比較器 |
+
+### 主要ファイル（`src/problems/`）
+
+| ファイル | 役割 |
+|---|---|
+| `RCPSP_Problem.h/cpp` | 基底問題クラス，SchedObj 評価，capacity_t 生成 |
+| `RCPSP_Problem_MaxShift.h/cpp` | MaxShift エンコーディング評価 |
+| `RCPSP_Problem_Splitting.h/cpp` | P2/P3 作業分割 + SchedObj 評価 |
+| `RCPSP_Problem_Splitting_MaxShift.h/cpp` | P2/P3 作業分割 + MaxShift 評価 |
+| `RCPSP_Problem_Setup.h/cpp` | セットアップ時間モデル（TW/WD/WR） |
+| `MaxShiftSensitivity.h/cpp` | MaxShift 上限値の感度分析クラス |
+| `RCPSP_Reader.h/cpp` | PSPLIB インスタンス読み込み |
+
+---
+
+## 日次メンテナンス Routines
+
+毎日終業時に Claude Code Routines が自動実行され，以下の 2 タスクを行う。
+
+### タスク 1 — `.miss_memory/` の更新
+
+今日の Claude Code セッション履歴を検索し，以下に該当するバグ・ミスを抽出して教訓ファイルを追記する。
+
+**記録対象**
+- コンパイルエラー・クラッシュの診断と修正
+- アルゴリズムのロジックバグ（誤出力・誤計算）
+- 性能問題（CPU 過負荷・メモリ・過剰 I/O）
+- ファイル操作・命名・パス解決のミス
+- 思い込みが覆された場面（「X は〇〇だと思っていたが違った」）
+
+**記録しないもの**
+- バグを伴わない通常のコード変更
+- スタイル・フォーマット修正
+- 初回で動いた機能追加
+
+**ファイル命名規則**
+```
+.miss_memory/<NNN>_<スネークケースタイトル>.md
+```
+既存ファイルの最大番号の続きから採番。その日新規バグがなければファイルを作成しない。
+
+**ファイルフォーマット**
+```markdown
+# <NNN>: <タイトル>
+
+## 発生日
+YYYY-MM-DD
+
+## バグの概要
+（何が起きたか・症状）
+
+## 根本原因
+（なぜ起きたか・コード or 設計上の問題点）
+
+## 修正内容
+（どう直したか。コードスニペットがあれば記載）
+
+## 教訓
+- （箇条書きで再発防止のポイント）
+
+## 確認方法（任意）
+（修正が正しいことをどうやって確認するか）
+```
+
+---
+
+### タスク 2 — `README.md` の更新
+
+`main.cpp` を読み込み，以下の項目が README と一致しているか確認・修正する。
+
+| 確認項目 | 対象箇所 |
+|---|---|
+| 使用中のランナークラス | `main()` 内のインスタンス生成 |
+| Config パラメータ | `populationSize` / `evalsPerStrategy` / `numStrategies*` |
+| 有効な解析 | `MaxShiftSensitivityAnalyzer` の on/off |
+| 出力ファイル命名 | `FUN_ENC_*` / `SCHED_ENC_*` のプレフィックス規則 |
+| 使用中の分割モード | P1 / P2 / P3 の実使用状況 |
+
+既に正確なセクションは変更しない。README は日本語を維持する。
+

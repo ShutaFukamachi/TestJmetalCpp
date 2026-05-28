@@ -328,7 +328,7 @@ SolutionSet *NSGAII::execute() {
             genLog << sRunId << "," << genCount << "," << avgShift << ","
                    << static_cast<int>(minMakespan) << "," << cntAllZero << ","
                    << minShift << "," << maxShift << "\n";
-            genLog.flush();
+            if (genCount % 50 == 0) genLog.flush();  // 毎世代 flush は I/O 負荷過大のため 50 世代ごとに変更
         }
     }
     setOutputParameter("evaluations", &evaluations);
