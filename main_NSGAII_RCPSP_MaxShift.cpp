@@ -35,7 +35,6 @@
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
 #include "Solution.h"
-#include "Variable.h"
 #include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
 #include "problems/RCPSP_Problem_MaxShift.h"
@@ -87,14 +86,14 @@ static void test1_maxShiftZero(const string &instanceFile) {
 
     int n    = probMS.getNumJobs();
     int nVar = probMS.getNumberOfVariables();
-    Variable **vars = solMS->getDecisionVariables();
+    auto &vars = solMS->getVars();
 
     // vars を probBase の solBase からコピー（変数数が同じなので直接代入）
-    Variable **baseVars = solBase->getDecisionVariables();
+    const auto &baseVars = solBase->getVars();
     for (int i = 0; i < n; ++i)
-        vars[i]->setValue(baseVars[i]->getValue());  // 活動リスト
+        vars[i] = baseVars[i];  // 活動リスト
     for (int j = 0; j < n && n + j < nVar; ++j)
-        vars[n + j]->setValue(0.0);                  // max_shift = 0
+        vars[n + j] = 0;                  // max_shift = 0
 
     probMS.evaluate(solMS);
     double ms_ms   = solMS->getObjective(0);
@@ -127,9 +126,9 @@ static void test2_clipping(const string &instanceFile) {
     bool initOk = true;
     for (int trial = 0; trial < 100; ++trial) {
         Solution *sol = prob.createRandomTopoSolution();
-        Variable **vars = sol->getDecisionVariables();
+        const auto &vars = sol->getVars();
         for (int j = 0; j < n && n + j < nVar; ++j) {
-            int v = (int)vars[n + j]->getValue();
+            int v = vars[n + j];
             if (v < 0 || v > halfT) { initOk = false; break; }
         }
         delete sol;
@@ -145,17 +144,17 @@ static void test2_clipping(const string &instanceFile) {
     bool mutOk = true;
     for (int trial = 0; trial < 50; ++trial) {
         Solution *sol = prob.createRandomTopoSolution();
-        Variable **vars = sol->getDecisionVariables();
+        auto &vars = sol->getVars();
         // 故意に範囲外の値を設定
         for (int j = 1; j < n - 1 && n + j < nVar; ++j)
-            vars[n + j]->setValue((double)(halfT + 100));
+            vars[n + j] = halfT + 100;
 
         // 変異を 10 回適用
         for (int rep = 0; rep < 10; ++rep)
             mut.execute(sol);
 
         for (int j = 0; j < n && n + j < nVar; ++j) {
-            int v = (int)vars[n + j]->getValue();
+            int v = vars[n + j];
             if (v < 0 || v > halfT) { mutOk = false; break; }
         }
         delete sol;
@@ -188,20 +187,20 @@ static void test3_minCostLeftAlign(const string &instanceFile) {
         Solution *solEST = prob.createRandomTopoSolution();
         Solution *solWide = new Solution(solEST);
 
-        Variable **vEST  = solEST->getDecisionVariables();
-        Variable **vWide = solWide->getDecisionVariables();
+        auto &vEST  = solEST->getVars();
+        auto &vWide = solWide->getVars();
 
         // 活動リストのみコピー (max_shift は別に設定)
         for (int i = 0; i < n; ++i)
-            vWide[i]->setValue(vEST[i]->getValue());
+            vWide[i] = vEST[i];
 
         // solEST: max_shift = 0 (最早配置)
         for (int j = 0; j < n && n + j < nVar; ++j)
-            vEST[n + j]->setValue(0.0);
+            vEST[n + j] = 0;
 
         // solWide: max_shift = T/2 (広域探索)
         for (int j = 0; j < n && n + j < nVar; ++j)
-            vWide[n + j]->setValue((double)halfT);
+            vWide[n + j] = halfT;
 
         prob.evaluate(solEST);
         prob.evaluate(solWide);
@@ -243,13 +242,13 @@ static void test4_crossoverInheritance(const string &instanceFile) {
     Solution *parent1 = prob.createRandomTopoSolution();
     Solution *parent2 = prob.createRandomTopoSolution();
 
-    Variable **v1 = parent1->getDecisionVariables();
-    Variable **v2 = parent2->getDecisionVariables();
+    auto &v1 = parent1->getVars();
+    auto &v2 = parent2->getVars();
 
     // max_shift を識別しやすい値に設定
     for (int j = 0; j < n && n + j < nVar; ++j) {
-        v1[n + j]->setValue((double)(j * 3));         // 親1: j*3
-        v2[n + j]->setValue((double)(100 + j * 3));   // 親2: 100+j*3
+        v1[n + j] = j * 3;         // 親1: j*3
+        v2[n + j] = 100 + j * 3;   // 親2: 100+j*3
     }
 
     MaxShiftCrossover crossover(1.0);  // 必ず交叉
@@ -262,9 +261,9 @@ static void test4_crossoverInheritance(const string &instanceFile) {
         Solution **children = (Solution **)crossover.execute(par);
 
         for (int ci = 0; ci < 2; ++ci) {
-            Variable **vc = children[ci]->getDecisionVariables();
+            const auto &vc = children[ci]->getVars();
             for (int j = 0; j < n && n + j < nVar; ++j) {
-                int childMS = (int)vc[n + j]->getValue();
+                int childMS = vc[n + j];
                 int from1   = j * 3;
                 int from2   = 100 + j * 3;
                 if (childMS != from1 && childMS != from2) {
@@ -332,17 +331,17 @@ static void task2_scheduleComparison(const string &instanceFile) {
 
     // --- 活動リストを共有する2解を生成 ---
     Solution *solA = prob.createRandomTopoSolution();
-    Variable **varsA = solA->getDecisionVariables();
+    auto &varsA = solA->getVars();
     // max_shift = 0 （最早配置）
     for (int j = 0; j < n && n + j < nVar; ++j)
-        varsA[n + j]->setValue(0.0);
+        varsA[n + j] = 0;
     prob.evaluate(solA);
 
     Solution *solB = new Solution(solA);   // 活動リストをコピー
-    Variable **varsB = solB->getDecisionVariables();
+    auto &varsB = solB->getVars();
     // max_shift = T/4 （コスト最小探索）、ダミー端点は 0 のまま
     for (int j = 1; j < n - 1 && n + j < nVar; ++j)
-        varsB[n + j]->setValue(static_cast<double>(halfT));
+        varsB[n + j] = halfT;
     prob.evaluate(solB);
 
     // --- EST（先行制約のみ、資源無視）を計算 ---
@@ -358,7 +357,7 @@ static void task2_scheduleComparison(const string &instanceFile) {
         // 活動リスト順に EST を計算
         vector<int> finPred(n, 0);
         for (int pos = 0; pos < n; ++pos) {
-            int j = static_cast<int>(varsA[pos]->getValue());
+            int j = varsA[pos];
             int e = 0;
             for (int p : preds[j]) e = max(e, finPred[p]);
             estPred[j] = e;
@@ -681,12 +680,12 @@ void NSGAMaxShiftRunner::writeResultFiles(
 
     for (int i = 0; i < pareto->size(); ++i) {
         Solution *sol = pareto->get(i);
-        Variable **vars = sol->getDecisionVariables();
+        const auto &vars = sol->getVars();
 
         funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
 
         for (int j = 0; j < nVar; ++j) {
-            varFile << vars[j]->getValue();
+            varFile << vars[j];
             if (j + 1 < nVar) varFile << " ";
         }
         varFile << "\n";

@@ -28,11 +28,11 @@ void * PermutationMutation::execute(void * object) {
     static thread_local std::mt19937 gen{std::random_device{}()};
     std::uniform_real_distribution<> prob01(0.0, 1.0);
 
-    Variable **vars = s->getDecisionVariables();
+    auto &vars = s->getVars();
 
     // 現在の活動リストを取得
     std::vector<int> seq(nJobs);
-    for (int i = 0; i < nJobs; ++i) seq[i] = (int)vars[i]->getValue();
+    for (int i = 0; i < nJobs; ++i) seq[i] = vars[i];
 
     // ========================================================
     // 第1段階: 挿入変異
@@ -92,7 +92,7 @@ void * PermutationMutation::execute(void * object) {
     }
 
     // 変異後の活動リストを変数に書き戻す
-    for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)seq[i]);
+    for (int i = 0; i < nJobs; ++i) vars[i] = seq[i];
 
     // ========================================================
     // 第2段階: schedObj のビット反転
@@ -101,8 +101,8 @@ void * PermutationMutation::execute(void * object) {
     for (int j = 1; j < nJobs - 1; ++j) {
         if (prob01(gen) < probability) {
             int idx = nJobs + j;
-            int v   = (int)vars[idx]->getValue();
-            vars[idx]->setValue(v ? 0 : 1);
+            int v = vars[idx];
+            vars[idx] = v ? 0 : 1;
         }
     }
 

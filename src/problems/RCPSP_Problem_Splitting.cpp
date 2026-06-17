@@ -1,6 +1,5 @@
 #include "RCPSP_Problem_Splitting.h"
 #include "Solution.h"
-#include "Variable.h"
 
 #include <algorithm>
 #include <numeric>
@@ -174,12 +173,12 @@ void RCPSP_Problem_Splitting::evaluate(Solution *solution) {
     int n    = getNumJobs();
     int nRes = inst.nRes;
 
-    Variable **vars = solution->getDecisionVariables();
-    int nVars       = solution->getNumberOfVariables();
+    auto &vars = solution->getVars();
+    int nVars  = solution->getNumberOfVariables();
 
     // ---- 活動リスト取得・修復 ----
     std::vector<int> seq(n);
-    for (int i = 0; i < n; ++i) seq[i] = (int)vars[i]->getValue();
+    for (int i = 0; i < n; ++i) seq[i] = vars[i];
 
     if (!checkTopological(seq)) {
         // Kahn法で先行制約を満たすよう修復（基底クラスの private 関数を
@@ -207,7 +206,7 @@ void RCPSP_Problem_Splitting::evaluate(Solution *solution) {
         }
         if ((int)repaired.size() == n) {
             seq = repaired;
-            for (int i = 0; i < n; ++i) vars[i]->setValue((double)seq[i]);
+            for (int i = 0; i < n; ++i) vars[i] = seq[i];
         }
     }
 
@@ -215,7 +214,7 @@ void RCPSP_Problem_Splitting::evaluate(Solution *solution) {
     std::vector<int> schedObj(n, 0);
     if (nVars >= 2 * n) {
         for (int j = 0; j < n; ++j) {
-            int v = (int)vars[n + j]->getValue();
+            int v = vars[n + j];
             schedObj[j] = (v != 0) ? 1 : 0;
         }
     } else {

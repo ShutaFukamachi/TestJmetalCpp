@@ -302,6 +302,7 @@ void SolutionSet::printVariablesToFile(string file, bool append) {
  * Empties the SolutionSet
  */
 void SolutionSet::clear(){
+  for (auto* s : solutionsList_) delete s;
   solutionsList_.clear();
 } // clear
 
@@ -311,10 +312,11 @@ void SolutionSet::clear(){
  * @param i The position of the solution to remove.
  */
 void SolutionSet::remove(int i) {
-  if (i < 0 || i >= solutionsList_.size()) {
+  if (i < 0 || i >= (int)solutionsList_.size()) {
     cout << "Error in class SolutionSet trying to access to an element out of range" << endl;
     exit(-1);
   }
+  delete solutionsList_[i];
   solutionsList_.erase(solutionsList_.begin() + i);
 } // remove
 
@@ -344,10 +346,11 @@ SolutionSet * SolutionSet::join(SolutionSet *another) {
  * @param solution The new solution
  */
 void SolutionSet::replace(int position, Solution *solution) {
-  if (position < 0 || position >= solutionsList_.size()) {
+  if (position < 0 || position >= (int)solutionsList_.size()) {
     cout << "Error in class SolutionSet trying to access to an element out of range" << endl;
     exit(-1);
   }
+  delete solutionsList_[position];
   solutionsList_[position] = solution;
 } // replace
 
@@ -374,4 +377,17 @@ void SolutionSet::printObjectives() {
   for (int i = 0; i < solutionsList_.size(); i++) {
     cout << solutionsList_.at(i)->toString() << endl;
   }
+}
+
+// Overloads that ignore the bool parameter (always delete)
+void SolutionSet::clear(bool /*del*/) {
+  clear();
+}
+
+void SolutionSet::remove(int i, bool /*del*/) {
+  remove(i);
+}
+
+void SolutionSet::replace(int position, Solution *solution, bool /*del*/) {
+  replace(position, solution);
 }

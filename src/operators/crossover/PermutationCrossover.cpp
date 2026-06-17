@@ -36,19 +36,19 @@ void * PermutationCrossover::execute(void * object) {
         return (void*)offs;
     }
 
-    Variable **v1 = p1->getDecisionVariables();
-    Variable **v2 = p2->getDecisionVariables();
+    const auto &v1 = p1->getVars();
+    const auto &v2 = p2->getVars();
 
     // 活動リストと schedObj を配列に展開
     std::vector<int> mother(nJobs), father(nJobs);
     std::vector<int> mSched(nJobs), fSched(nJobs);
     for (int i = 0; i < nJobs; ++i) {
-        mother[i] = (int)v1[i]->getValue();
-        father[i] = (int)v2[i]->getValue();
+        mother[i] = v1[i];
+        father[i] = v2[i];
     }
     for (int j = 0; j < nJobs; ++j) {
-        mSched[j] = (int)v1[nJobs + j]->getValue();  // job j の schedObj (Mother)
-        fSched[j] = (int)v2[nJobs + j]->getValue();  // job j の schedObj (Father)
+        mSched[j] = v1[nJobs + j];  // job j の schedObj (Mother)
+        fSched[j] = v2[nJobs + j];  // job j の schedObj (Father)
     }
 
     // 交叉点を 2 つ決める（ダミー端点を除いた範囲: 1..nJobs-1）
@@ -119,12 +119,12 @@ void * PermutationCrossover::execute(void * object) {
     offspring[1] = new Solution(p2);
 
     for (int i = 0; i < nJobs; ++i) {
-        offspring[0]->getDecisionVariables()[i]->setValue(alA[i]);
-        offspring[1]->getDecisionVariables()[i]->setValue(alB[i]);
+        offspring[0]->getVars()[i] = alA[i];
+        offspring[1]->getVars()[i] = alB[i];
     }
     for (int j = 0; j < nJobs; ++j) {
-        offspring[0]->getDecisionVariables()[nJobs + j]->setValue(soA[j]);
-        offspring[1]->getDecisionVariables()[nJobs + j]->setValue(soB[j]);
+        offspring[0]->getVars()[nJobs + j] = soA[j];
+        offspring[1]->getVars()[nJobs + j] = soB[j];
     }
 
     return (void*)offspring;

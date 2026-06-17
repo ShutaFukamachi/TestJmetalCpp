@@ -1,6 +1,5 @@
 #include "RCPSP_Problem_MaxShift.h"
 #include "Solution.h"
-#include "Variable.h"
 
 #include <algorithm>
 #include <cmath>
@@ -91,15 +90,15 @@ void RCPSP_Problem_MaxShift::evaluate(Solution *solution) {
     const int n    = getNumJobs();
     const int nRes = instance.nRes;
 
-    Variable **vars = solution->getDecisionVariables();
+    auto &vars = solution->getVars();
 
     // ---- 1. 活動リスト取得 & 先行制約修復 ----
     std::vector<int> seq(n);
-    for (int i = 0; i < n; ++i) seq[i] = (int)vars[i]->getValue();
+    for (int i = 0; i < n; ++i) seq[i] = vars[i];
 
     if (!checkTopological(seq)) {
         seq = topoRepair(seq, instance.successors, n);
-        for (int i = 0; i < n; ++i) vars[i]->setValue((double)seq[i]);
+        for (int i = 0; i < n; ++i) vars[i] = seq[i];
     }
 
     // ---- 2. ホライゾン T ----
@@ -114,7 +113,7 @@ void RCPSP_Problem_MaxShift::evaluate(Solution *solution) {
         std::fill(maxShift.begin(), maxShift.end(), outputMaxShift_);
     } else {
         for (int j = 0; j < n; ++j) {
-            int v = (int)vars[n + j]->getValue();
+            int v = vars[n + j];
             maxShift[j] = std::max(0, std::min(halfT, v));
         }
     }
@@ -233,7 +232,7 @@ void RCPSP_Problem_MaxShift::evaluate(Solution *solution) {
 //  ランダムトポロジカルソートを生成して vars[0..n-1] に書き込む
 // ============================================================
 static void buildRandomTopo(int n, const std::vector<std::vector<int>> &successors,
-                             Variable **vars, std::mt19937 &rng)
+                             std::vector<int> &vars, std::mt19937 &rng)
 {
     std::vector<int> indeg(n, 0);
     for (int j = 0; j < n; ++j)
@@ -261,7 +260,7 @@ static void buildRandomTopo(int n, const std::vector<std::vector<int>> &successo
         perm.resize(n);
         std::iota(perm.begin(), perm.end(), 0);
     }
-    for (int i = 0; i < n; ++i) vars[i]->setValue((double)perm[i]);
+    for (int i = 0; i < n; ++i) vars[i] = perm[i];
 }
 
 // ============================================================
@@ -273,7 +272,7 @@ Solution* RCPSP_Problem_MaxShift::createMakespanExtremeSolution() {
     const int nVars = getNumberOfVariables();
 
     Solution *sol   = new Solution(this);
-    Variable **vars = sol->getDecisionVariables();
+    auto &vars = sol->getVars();
 
     static thread_local std::mt19937 rng{std::random_device{}()};
     buildRandomTopo(n, instance.successors, vars, rng);
@@ -281,7 +280,7 @@ Solution* RCPSP_Problem_MaxShift::createMakespanExtremeSolution() {
     for (int j = 0; j < n; ++j) {
         int idx = n + j;
         if (idx >= nVars) break;
-        vars[idx]->setValue(0.0);
+        vars[idx] = 0;
     }
     return sol;
 }
@@ -296,7 +295,7 @@ Solution* RCPSP_Problem_MaxShift::createCostExtremeSolution() {
     const int halfT = getEffectiveHalfT();  // strategy 依存の上限
 
     Solution *sol   = new Solution(this);
-    Variable **vars = sol->getDecisionVariables();
+    auto &vars = sol->getVars();
 
     static thread_local std::mt19937 rng{std::random_device{}()};
     buildRandomTopo(n, instance.successors, vars, rng);
@@ -304,11 +303,11 @@ Solution* RCPSP_Problem_MaxShift::createCostExtremeSolution() {
     for (int j = 0; j < n; ++j) {
         int idx = n + j;
         if (idx >= nVars) break;
-        vars[idx]->setValue((double)halfT);
+        vars[idx] = halfT;
     }
     // ダミー端点は 0
-    if (n > 0 && n     < nVars) vars[n + 0]->setValue(0.0);
-    if (n > 1 && n+n-1 < nVars) vars[n + n - 1]->setValue(0.0);
+    if (n > 0 && n     < nVars) vars[n + 0] = 0;
+    if (n > 1 && n+n-1 < nVars) vars[n + n - 1] = 0;
     return sol;
 }
 
@@ -327,7 +326,7 @@ Solution* RCPSP_Problem_MaxShift::createRandomTopoSolution() {
     const int halfT = getEffectiveHalfT();  // strategy 依存の上限
 
     Solution *sol = new Solution(this);
-    Variable **vars = sol->getDecisionVariables();
+    auto &vars = sol->getVars();
 
     // ---- 活動リスト: ランダムトポロジカルソート ----
     static thread_local std::mt19937 msRng{std::random_device{}()};
@@ -356,18 +355,18 @@ Solution* RCPSP_Problem_MaxShift::createRandomTopoSolution() {
             if (idx >= nVars) break;
 
             if (r < 0.30) {
-                vars[idx]->setValue(0.0);
+                vars[idx] = 0;
             } else if (r < 0.70) {
-                vars[idx]->setValue((double)ms_small(msRng));
+                vars[idx] = ms_small(msRng);
             } else {
-                vars[idx]->setValue((double)ms_dist(msRng));
+                vars[idx] = ms_dist(msRng);
             }
         }
     }
 
     // ダミー端点は常に 0
-    if (n > 0 && n     < nVars) vars[n + 0]->setValue(0.0);
-    if (n > 1 && n+n-1 < nVars) vars[n + n - 1]->setValue(0.0);
+    if (n > 0 && n     < nVars) vars[n + 0] = 0;
+    if (n > 1 && n+n-1 < nVars) vars[n + n - 1] = 0;
 
     return sol;
 }

@@ -45,7 +45,6 @@
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
 #include "Solution.h"
-#include "Variable.h"
 #include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
 #include "problems/RCPSP_Problem_MaxShift.h"

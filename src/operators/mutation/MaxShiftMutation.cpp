@@ -21,14 +21,14 @@ void * MaxShiftMutation::execute(void * object) {
     static thread_local std::mt19937 gen{std::random_device{}()};
     std::uniform_real_distribution<> prob01(0.0, 1.0);
 
-    Variable **vars = s->getDecisionVariables();
+    auto &vars = s->getVars();
 
     // ========================================================
     // 第1段階: 活動リストの挿入変異
     //   ダミー開始 (job 0) とダミー終了 (job nJobs-1) は変異しない
     // ========================================================
     std::vector<int> seq(nJobs);
-    for (int i = 0; i < nJobs; ++i) seq[i] = (int)vars[i]->getValue();
+    for (int i = 0; i < nJobs; ++i) seq[i] = vars[i];
 
     for (int j = 1; j < nJobs - 1; ++j) {
         if (prob01(gen) >= probability) continue;
@@ -74,7 +74,7 @@ void * MaxShiftMutation::execute(void * object) {
     }
 
     // 変異後の活動リストを書き戻す
-    for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)seq[i]);
+    for (int i = 0; i < nJobs; ++i) vars[i] = seq[i];
 
     // ========================================================
     // 第2段階: max_shift の変異（ゼロリセット付き）
@@ -89,9 +89,9 @@ void * MaxShiftMutation::execute(void * object) {
     for (int j = 1; j < nJobs - 1; ++j) {
         if (prob01(gen) < probability) {
             if (prob01(gen) < zeroResetProb) {
-                vars[nJobs + j]->setValue(0.0);
+                vars[nJobs + j] = 0;
             } else {
-                vars[nJobs + j]->setValue((double)ms_dist(gen));
+                vars[nJobs + j] = ms_dist(gen);
             }
         }
     }

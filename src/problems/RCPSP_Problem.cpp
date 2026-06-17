@@ -1,7 +1,6 @@
 #include "RCPSP_Problem.h"
 #include "RCPSP_Reader.h"
 #include "Solution.h"
-#include "Variable.h"
 
 #include <algorithm>
 #include <functional>
@@ -330,8 +329,8 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
     numberOfVariables_ = numberOfJobs_ * 2;
     numberOfObjectives_ = 2;
 
-    lowerLimit_ = new double[numberOfVariables_];
-    upperLimit_ = new double[numberOfVariables_];
+    lowerLimit_.assign(numberOfVariables_, 0.0);
+    upperLimit_.assign(numberOfVariables_, 0.0);
 
     for (int i = 0; i < numberOfJobs_; ++i) {
         lowerLimit_[i] = 0;
@@ -341,8 +340,6 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
         lowerLimit_[i] = 0;
         upperLimit_[i] = 1;
     }
-
-    solutionType_ = new IntSolutionType(this);
 
     COST_R           = instance.nRes;
     COST_INITIALIZED = false;
@@ -477,9 +474,9 @@ bool RCPSP_Problem::checkTopological(const std::vector<int> &seq) const {
 
 bool RCPSP_Problem::checkTopological(Solution *solution) const {
     std::vector<int> seq(numberOfJobs_);
-    Variable **vars = solution->getDecisionVariables();
+    const auto &vars = solution->getVars();
     for (int i = 0; i < numberOfJobs_; ++i) {
-        seq[i] = (int) vars[i]->getValue();
+        seq[i] = vars[i];
     }
     return checkTopological(seq);
 }
@@ -490,18 +487,18 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     int n    = numberOfJobs_;
     int nRes = instance.nRes;
 
-    Variable **vars = solution->getDecisionVariables();
+    auto &vars = solution->getVars();
 
     std::vector<int> seq(n);
     for (int i = 0; i < n; ++i) {
-        seq[i] = (int) vars[i]->getValue();
+        seq[i] = vars[i];
     }
 
     if (!checkTopological(seq)) {
         // ペナルティではなく先行制約を保った順序に修復する
         seq = repairToTopological(seq, instance.successors, n);
         // 修復済みシーケンスを変数に書き戻す
-        for (int i = 0; i < n; ++i) vars[i]->setValue((double)seq[i]);
+        for (int i = 0; i < n; ++i) vars[i] = seq[i];
     }
 
     // ---- ホライゾン T の決定 ----
@@ -519,7 +516,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     std::vector<int> schedObj(n, 0);
     if (numberOfVariables_ >= 2 * n) {
         for (int j = 0; j < n; ++j) {
-            int v = (int)vars[n + j]->getValue();
+            int v = vars[n + j];
             schedObj[j] = (v != 0) ? 1 : 0;
         }
     }
@@ -727,19 +724,16 @@ void RCPSP_Problem::localSearchOnSchedObj(Solution *solution, int maxLSMoves) {
 
             Solution *neighbor = new Solution(solution);
 
-            Variable **varsN = neighbor->getDecisionVariables();
+            auto &varsN = neighbor->getVars();
             int schedIndex = nJobs + j;
 
-            int old = (int)varsN[schedIndex]->getValue();
-            varsN[schedIndex]->setValue(1 - old);
+            int old = varsN[schedIndex];
+            varsN[schedIndex] = 1 - old;
 
             this->evaluate(neighbor);
 
             if (dominatesSolution(neighbor, solution)) {
-                Variable **varsS = solution->getDecisionVariables();
-                for (int k = 0; k < nVars; ++k) {
-                    varsS[k]->setValue(varsN[k]->getValue());
-                }
+                solution->getVars() = neighbor->getVars();
                 for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
                     solution->setObjective(o, neighbor->getObjective(o));
                 }
@@ -764,11 +758,11 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
     if (nJobs <= 2) return;
     if (nVars < 2 * nJobs) return;
 
-    Variable **vars = solution->getDecisionVariables();
+    const auto &vars = solution->getVars();
 
     std::vector<int> seq(nJobs);
     for (int i = 0; i < nJobs; ++i) {
-        seq[i] = (int)vars[i]->getValue();
+        seq[i] = vars[i];
     }
     if (!checkTopological(seq)) return;
 
@@ -827,20 +821,17 @@ void RCPSP_Problem::localSearchOnActivityOrder(Solution *solution, int maxLSMove
             if (bad) continue;
 
             Solution *neighbor = new Solution(solution);
-            Variable **varsN = neighbor->getDecisionVariables();
+            auto &varsN = neighbor->getVars();
 
-            double vi = varsN[i]->getValue();
-            double vj = varsN[j]->getValue();
-            varsN[i]->setValue(vj);
-            varsN[j]->setValue(vi);
+            int vi = varsN[i];
+            int vj = varsN[j];
+            varsN[i] = vj;
+            varsN[j] = vi;
 
             this->evaluate(neighbor);
 
             if (dominatesSolution(neighbor, solution)) {
-                Variable **varsS = solution->getDecisionVariables();
-                for (int k = 0; k < nVars; ++k) {
-                    varsS[k]->setValue(varsN[k]->getValue());
-                }
+                solution->getVars() = neighbor->getVars();
                 for (int o = 0; o < solution->getNumberOfObjectives(); ++o) {
                     solution->setObjective(o, neighbor->getObjective(o));
                 }
@@ -874,7 +865,7 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
     int nVars = numberOfVariables_;
 
     Solution* sol = new Solution(this);
-    Variable** vars = sol->getDecisionVariables();
+    auto &vars = sol->getVars();
 
     std::vector<int> indeg(nJobs, 0);
     for (int j = 0; j < nJobs; ++j) {
@@ -911,17 +902,17 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    for (int i = 0; i < nJobs; ++i) vars[i]->setValue((double)perm[i]);
+    for (int i = 0; i < nJobs; ++i) vars[i] = perm[i];
 
     // schedObj を 50% 確率でランダム割り当て（フェーズ2の仕様通り）
     std::bernoulli_distribution coin(0.5);
     for (int j = 0; j < nJobs; ++j) {
         int idx = nJobs + j;
-        if (idx < nVars) vars[idx]->setValue(coin(rng) ? 1.0 : 0.0);
+        if (idx < nVars) vars[idx] = coin(rng) ? 1 : 0;
     }
     // ダミー端点は常に 0（makespan 優先）
-    if (nJobs > 0 && nJobs < nVars)              vars[nJobs + 0]->setValue(0.0);
-    if (nJobs > 1 && nJobs + nJobs - 1 < nVars) vars[nJobs + nJobs - 1]->setValue(0.0);
+    if (nJobs > 0 && nJobs < nVars)              vars[nJobs + 0] = 0;
+    if (nJobs > 1 && nJobs + nJobs - 1 < nVars) vars[nJobs + nJobs - 1] = 0;
 
     return sol;
 }
@@ -943,9 +934,9 @@ std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
     int n    = numberOfJobs_;
     int nRes = instance.nRes;
 
-    Variable **vars = solution->getDecisionVariables();
+    const auto &vars = solution->getVars();
     std::vector<int> seq(n);
-    for (int i = 0; i < n; ++i) seq[i] = (int)vars[i]->getValue();
+    for (int i = 0; i < n; ++i) seq[i] = vars[i];
 
     std::vector<std::vector<int>> preds(n);
     for (int j = 0; j < n; ++j)

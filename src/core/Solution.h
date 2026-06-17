@@ -1,115 +1,84 @@
-//  Solution.h
-//
-//  Author:
-//       Antonio J. Nebro <antonio@lcc.uma.es>
-//       Juan J. Durillo <durillo@lcc.uma.es>
-//       Esteban López-Camacho <esteban@lcc.uma.es>
-//
-//  Copyright (c) 2011 Antonio J. Nebro, Juan J. Durillo
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU Lesser General Public License for more details.
-//
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+#pragma once
 #ifndef __SOLUTION__
 #define __SOLUTION__
 
 #include <string>
-#include <sstream>
-#include <limits>
-#include <stdlib.h>
-#include <stddef.h>
 #include <vector>
-#include "Problem.h"
-#include "Variable.h"
-#include "SolutionType.h"
+#include <limits>
+#include <sstream>
 
+class Problem;
 
-//using namespace std;
-//
-class Problem ;
-class Variable ;
-class SolutionType ;
-
-/**
- * @class Solution
- * @brief Class representing a solution for a problem
-**/
 class Solution {
+public:
+    Solution() = default;
+    explicit Solution(Problem* problem);
+
+    // Value copy semantics (vectors handle memory automatically)
+    Solution(const Solution&) = default;
+    Solution& operator=(const Solution&) = default;
+    Solution(Solution&&) = default;
+    Solution& operator=(Solution&&) = default;
+    ~Solution() = default;
+
+    // Pointer-based copy for backward compatibility with existing code
+    // that does: new Solution(ptr)
+    explicit Solution(Solution* other) : Solution(*other) {}
+
+    // --- Variable access (replaces Variable**) ---
+    int  getVar(int i) const     { return vars_[i]; }
+    void setVar(int i, int v)    { vars_[i] = v; }
+    std::vector<int>&       getVars()       { return vars_; }
+    const std::vector<int>& getVars() const { return vars_; }
+    int getNumberOfVariables() const { return (int)vars_.size(); }
+
+    // --- Objectives ---
+    double getObjective(int i) const;
+    void   setObjective(int i, double v);
+    int    getNumberOfObjectives() const { return (int)objectives_.size(); }
+
+    // --- Metadata ---
+    double getFitness() const               { return fitness_; }
+    void   setFitness(double v)             { fitness_ = v; }
+    double getCrowdingDistance() const      { return crowdingDistance_; }
+    void   setCrowdingDistance(double v)    { crowdingDistance_ = v; }
+    int    getRank() const                  { return rank_; }
+    void   setRank(int v)                   { rank_ = v; }
+    double getOverallConstraintViolation() const  { return overallConstraintViolation_; }
+    void   setOverallConstraintViolation(double v){ overallConstraintViolation_ = v; }
+    int    getNumberOfViolatedConstraints() const  { return numberOfViolatedConstraints_; }
+    void   setNumberOfViolatedConstraints(int v)   { numberOfViolatedConstraints_ = v; }
+    bool   isMarked() const     { return marked_; }
+    void   mark()               { marked_ = true; }
+    void   unMark()             { marked_ = false; }
+    int    getLocation() const  { return location_; }
+    void   setLocation(int v)   { location_ = v; }
+    double getKDistance() const { return kDistance_; }
+    void   setKDistance(double v){ kDistance_ = v; }
+    double getDistanceToSolutionSet() const { return distanceToSolutionSet_; }
+    void   setDistanceToSolutionSet(double v){ distanceToSolutionSet_ = v; }
+    double getAggregativeValue() const;
+    std::string toString() const;
+
+    Problem* getProblem() const { return problem_; }
+
+    // RCPSP-specific fields (used by evaluate() and copied normally)
+    std::vector<int> startTimes_;
+    std::vector<std::vector<int>> execSlots_;
 
 private:
-  Problem * problem_;
-  SolutionType * type_;
-  Variable ** variable_;
-  int numberOfVariables_;
-  double *objective_;
-  int numberOfObjectives_;
-  double fitness_;
-  bool marked_;
-  int rank_;
-  double overallConstraintViolation_;
-  int numberOfViolatedConstraints_;
-  int location_;
-  double kDistance_;
-  double crowdingDistance_;
-  double distanceToSolutionSet_;
-
-public:
-  // RCPSP用: evaluate()で確定した開始時刻をここに保存し、コピー時も引き継ぐ
-  std::vector<int> startTimes_;
-  // RCPSP用: 各ジョブが実際に実行した時刻スロットのリスト（P2/P3対応）
-  // execSlots_[j] = ジョブjが実行した全時刻 t のソート済みリスト（Σ=d_j個）
-  std::vector<std::vector<int>> execSlots_;
-  Solution ();
-  Solution (int numberOfObjectives);
-  Solution (Problem * problem);
-  //getNewsolution (Problem *problem);
-  Solution(Problem * problem, Variable ** variables);
-  Solution (Solution * solution);
-
-  ~Solution();
-
-  void setDistanceToSolutionSet(double distance);
-  double getDistanceToSolutionSet();
-  void setKDistance(double distance);
-  double getKDistance();
-  void setCrowdingDistance(double distance);
-  double getCrowdingDistance();
-  void setFitness(double fitness);
-  double getFitness();
-  void setObjective(int i, double value);
-  double getObjective(int i);
-  int getNumberOfObjectives();
-  int getNumberOfVariables();
-  string toString();
-  Variable ** getDecisionVariables();
-  void setDecisionVariables(Variable ** variables);
-  bool isMarked();
-  void mark();
-  void unMark();
-  void setRank(int value);
-  int getRank();
-  void setOverallConstraintViolation(double value);
-  double getOverallConstraintViolation();
-  void setNumberOfViolatedConstraints(int value);
-  int getNumberOfViolatedConstraints();
-  void setLocation(int location);
-  int getLocation();
-  void setType(SolutionType * type);
-  SolutionType *getType();
-  double getAggregativeValue();
-  Problem * getProblem() ;
-  //int getNumberOfBits();
-
+    Problem* problem_ = nullptr;
+    std::vector<int>    vars_;
+    std::vector<double> objectives_;
+    double fitness_                    = 0.0;
+    double crowdingDistance_           = 0.0;
+    double kDistance_                  = 0.0;
+    double distanceToSolutionSet_      = std::numeric_limits<double>::max();
+    double overallConstraintViolation_ = 0.0;
+    int    numberOfViolatedConstraints_ = 0;
+    bool   marked_   = false;
+    int    rank_     = 0;
+    int    location_ = 0;
 };
 
 #endif

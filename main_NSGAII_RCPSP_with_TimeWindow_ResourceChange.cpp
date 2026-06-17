@@ -12,7 +12,6 @@
 #include "core/Algorithm.h"
 #include "core/SolutionSet.h"
 #include "Solution.h"
-#include "Variable.h"
 #include "metaheuristics/nsgaII/NSGAII.h"
 #include "problems/RCPSP_Problem.h"
 #include "operators/crossover/PermutationCrossover.h"
@@ -140,7 +139,7 @@ static void writeResults(const string &funPath,
     for (int i = 0; i < pareto->size(); ++i) {
         Solution *sol = pareto->get(i);
 
-        Variable **vars = sol->getDecisionVariables();
+        const auto &vars = sol->getVars();
 
         // min_makespan → ESS (shift=0) 再評価
         //   FUN・SCHED の両方に ESS 値を使う → 値が一致し Gantt もコンパクト
@@ -154,7 +153,7 @@ static void writeResults(const string &funPath,
         funFile << sol->getObjective(0) << " " << sol->getObjective(1) << "\n";
 
         for (int j = 0; j < nVar; ++j) {
-            varFile << vars[j]->getValue();
+            varFile << vars[j];
             if (j + 1 < nVar) varFile << " ";
         }
         varFile << "\n";

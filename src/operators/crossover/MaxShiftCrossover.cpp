@@ -36,20 +36,20 @@ void * MaxShiftCrossover::execute(void * object) {
         return (void*)offs;
     }
 
-    Variable **v1 = p1->getDecisionVariables();
-    Variable **v2 = p2->getDecisionVariables();
+    const auto &v1 = p1->getVars();
+    const auto &v2 = p2->getVars();
 
     // 活動リストと max_shift を配列に展開
     std::vector<int> mother(nJobs), father(nJobs);
     std::vector<int> mShift(nJobs), fShift(nJobs);
 
     for (int i = 0; i < nJobs; ++i) {
-        mother[i] = (int)v1[i]->getValue();
-        father[i] = (int)v2[i]->getValue();
+        mother[i] = v1[i];
+        father[i] = v2[i];
     }
     for (int j = 0; j < nJobs; ++j) {
-        mShift[j] = (int)v1[nJobs + j]->getValue();
-        fShift[j] = (int)v2[nJobs + j]->getValue();
+        mShift[j] = v1[nJobs + j];
+        fShift[j] = v2[nJobs + j];
     }
 
     // 交叉点を 2 つ決める（範囲: 1..nJobs-1）
@@ -118,12 +118,12 @@ void * MaxShiftCrossover::execute(void * object) {
     offspring[1] = new Solution(p2);
 
     for (int i = 0; i < nJobs; ++i) {
-        offspring[0]->getDecisionVariables()[i]->setValue(alA[i]);
-        offspring[1]->getDecisionVariables()[i]->setValue(alB[i]);
+        offspring[0]->getVars()[i] = alA[i];
+        offspring[1]->getVars()[i] = alB[i];
     }
     for (int j = 0; j < nJobs; ++j) {
-        offspring[0]->getDecisionVariables()[nJobs + j]->setValue(msA[j]);
-        offspring[1]->getDecisionVariables()[nJobs + j]->setValue(msB[j]);
+        offspring[0]->getVars()[nJobs + j] = msA[j];
+        offspring[1]->getVars()[nJobs + j] = msB[j];
     }
 
     return (void*)offspring;

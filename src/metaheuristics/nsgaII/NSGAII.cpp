@@ -308,10 +308,10 @@ SolutionSet *NSGAII::execute() {
 
             for (int i = 0; i < popSz; ++i) {
                 Solution  *s    = population->get(i);
-                Variable **vars = s->getDecisionVariables();
+                const auto &vars = s->getVars();
                 bool allZero = true;
                 for (int j = 1; j < nJobs - 1; ++j) {
-                    int v = static_cast<int>(vars[nJobs + j]->getValue());
+                    int v = vars[nJobs + j];
                     sumShift += v;
                     if (v < minShift) minShift = v;
                     if (v > maxShift) maxShift = v;

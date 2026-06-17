@@ -4,7 +4,6 @@
 
 #include "core/Problem.h"
 #include "Solution.h"
-#include "IntSolutionType.h"
 #include "RCPSP_Reader.h"
 #include <map>
 #include <string>
