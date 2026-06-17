@@ -346,7 +346,7 @@ void RCPSP_Problem_Setup::evaluate(Solution *solution)
     }
 
     // ---- schedObj ベクタ取得 ----
-    static std::mt19937 localRng(99999);
+    static thread_local std::mt19937 localRng(99999);
     std::vector<int> schedObj(n, 0);
     if (nVars >= 2 * n) {
         for (int j = 0; j < n; ++j) {

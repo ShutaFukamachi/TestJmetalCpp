@@ -13,8 +13,10 @@
 #include <fstream>
 #include <sstream>
 #include <queue>
+#include <mutex>
+#include <atomic>
 
-static std::mt19937 rng(12345);
+static thread_local std::mt19937 rng(std::random_device{}());
 
 // ============================================================
 // [追加] capacityAt() ヘルパー
@@ -137,6 +139,9 @@ static int  COST_R           = 4;
 static std::vector<std::vector<double>> COST_TABLE;
 static std::string COST_CSV_PATH = "costs.csv";
 
+static std::mutex         g_costMutex;
+static std::atomic<bool>  g_costInitialized{false};
+
 static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
     std::ifstream fin(filename);
     if (!fin) return false;
@@ -167,6 +172,7 @@ static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
     COST_R           = R;
     COST_T           = T;
     COST_INITIALIZED = true;
+    g_costInitialized.store(true, std::memory_order_release);
 
     std::cout << "[RCPSP_Problem] Loaded cost table from " << filename
               << " (R=" << R << ", T=" << T << ")\n";
@@ -174,7 +180,7 @@ static bool loadCostTableFromCSV(const std::string &filename, int expectedR) {
 }
 
 static bool writeCostTableToCSV(const std::string &filename) {
-    if (!COST_INITIALIZED || COST_R <= 0 || COST_T <= 0 || (int)COST_TABLE.size() != COST_R) {
+    if (!g_costInitialized.load(std::memory_order_acquire) || COST_R <= 0 || COST_T <= 0 || (int)COST_TABLE.size() != COST_R) {
         std::cerr << "[RCPSP_Problem] Cannot write cost table: not initialized.\n";
         return false;
     }
@@ -197,7 +203,9 @@ static bool writeCostTableToCSV(const std::string &filename) {
 }
 
 static void resetCostSeriesInternal() {
+    std::lock_guard<std::mutex> lk(g_costMutex);
     COST_INITIALIZED = false;
+    g_costInitialized.store(false, std::memory_order_relaxed);
     COST_T = -1;
     COST_R = 4;
     COST_TABLE.clear();
@@ -205,6 +213,9 @@ static void resetCostSeriesInternal() {
 }
 
 static void generateCostSeries(int R, int T) {
+    std::lock_guard<std::mutex> lk(g_costMutex);
+    if (g_costInitialized.load(std::memory_order_relaxed)) return;
+
     if (loadCostTableFromCSV(COST_CSV_PATH, R)) return;
 
     CostRNG crng;
@@ -242,12 +253,13 @@ static void generateCostSeries(int R, int T) {
     }
 
     COST_R = R; COST_T = T; COST_INITIALIZED = true;
+    g_costInitialized.store(true, std::memory_order_release);
     writeCostTableToCSV(COST_CSV_PATH);
     std::cout << "[RCPSP_Problem] Generated random cost series (R=" << R << ", T=" << T << ")\n";
 }
 
 static double resourceCost(int k, int t, int horizon) {
-    if (!COST_INITIALIZED) {
+    if (!g_costInitialized.load(std::memory_order_acquire)) {
         if (COST_R <= 0) COST_R = 4;
         generateCostSeries(COST_R, horizon);
     }
@@ -341,18 +353,26 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
         upperLimit_[i] = 1;
     }
 
-    COST_R           = instance.nRes;
-    COST_INITIALIZED = false;
-    COST_T           = -1;
+    // スレッドローカル RNG をストラテジーIDから決定論的にシードし直す
+    // → 並列実行しても strategy ごとに再現性が保たれる
+    rng.seed(12345u + static_cast<unsigned>(strategy_) * 1000003u);
 
-    // インスタンス固有のコストCSVパスを設定（例: costs_j301_1.csv）
+    COST_R = instance.nRes;
     {
         std::string base = filename;
         size_t p = base.find_last_of("/\\");
         if (p != std::string::npos) base = base.substr(p + 1);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) base = base.substr(0, dot);
-        COST_CSV_PATH = "costs_" + base + ".csv";
+        std::string newCsvPath = "costs_" + base + ".csv";
+        std::lock_guard<std::mutex> lk(g_costMutex);
+        if (COST_CSV_PATH != newCsvPath) {
+            // 別インスタンスに切り替わった → コストテーブルをリセット
+            COST_INITIALIZED = false;
+            g_costInitialized.store(false, std::memory_order_relaxed);
+            COST_T = -1;
+        }
+        COST_CSV_PATH = newCsvPath;
         std::cout << "[RCPSP_Problem] cost CSV path: " << COST_CSV_PATH << "\n";
     }
 
@@ -371,6 +391,12 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
 
     std::cout << "[RCPSP_Problem] nJobs=" << instance.nJobs
               << " nRes=" << instance.nRes << std::endl;
+}
+
+RCPSP_Problem::~RCPSP_Problem() {
+    delete[] lowerLimit_;
+    delete[] upperLimit_;
+    delete solutionType_;
 }
 
 // ============================================================
@@ -659,10 +685,7 @@ void RCPSP_Problem::evaluate(Solution *solution) {
         std::exit(1);
     }
 
-    // コストシフト後の実際の開始時刻をキャッシュしておく
-    // → computeStartTimes() がガントチャート用に正確な開始時刻を返せるようにする
-    startTimesCache_[solution] = start;
-    // Solution オブジェクト自身にも保存（コピー時も引き継がれる）
+    // Solution オブジェクト自身に開始時刻を保存（コピー時も引き継がれる）
     solution->startTimes_ = start;
 
     // P1: 連続実行なので execSlots_[j] = [start_j, start_j+1, ..., start_j+d_j-1]
@@ -918,14 +941,8 @@ Solution* RCPSP_Problem::createRandomTopoSolution() {
 }
 
 std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
-    // evaluate() でキャッシュされた実際の開始時刻（コストシフト済み）があれば返す
-    auto it = startTimesCache_.find(solution);
-    if (it != startTimesCache_.end()) {
-        return it->second;
-    }
-
-    // Solution オブジェクト自身に保存された開始時刻があれば返す
-    // （コピーによってポインタが変わっても startTimes_ は引き継がれる）
+    // Solution オブジェクト自身に保存された開始時刻を返す
+    // （コピーコンストラクタで引き継がれるため、コピー後も有効）
     if (!solution->startTimes_.empty()) {
         return solution->startTimes_;
     }

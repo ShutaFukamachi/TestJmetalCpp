@@ -40,6 +40,9 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <future>
+#include <mutex>
+#include <functional>
 
 #include "core/Problem.h"
 #include "core/Algorithm.h"
@@ -64,6 +67,16 @@ using namespace std;
 //  共通ユーティリティ（両ランナーで使用）
 // ============================================================
 namespace EncUtil {
+
+static std::mutex g_printMutex;
+
+inline void syncPrint(const std::string &msg) {
+    std::lock_guard<std::mutex> lk(g_printMutex);
+    std::cout << msg;
+}
+
+using ProbPair    = std::pair<RCPSP_Problem*, RCPSP_Problem_MaxShift*>;
+using ProbFactory = std::function<ProbPair(int s)>;
 
 string toCondTag(double rr, bool rv) {
     int rrInt = static_cast<int>(std::round(rr * 100));
@@ -195,49 +208,104 @@ void writeResultFiles(const string &outPrefix,
     }
 }
 
-// 複数 strategy を走らせて最終パレートフロントを返す（共通コア）
-// prob_ms が非 nullptr なら MaxShift オペレータを使用
-SolutionSet* runStrategies(RCPSP_Problem *prob,
-                            RCPSP_Problem_MaxShift *prob_ms,
+// 複数 strategy を並列で走らせて最終パレートフロントを返す
+// makeProb(s) : strategy s 用の独立した prob ペアを生成するファクトリ
+//   → 返されたポインタはこの関数内で delete される
+SolutionSet* runStrategies(ProbFactory makeProb,
                             int numStr,
                             int populationSize,
                             int evalsPerStrategy,
                             const string &encTag)
 {
-    SolutionSet *combined = new SolutionSet(numStr * populationSize * 4);
+    // ---- 各ストラテジーを std::async で並列実行 ----
+    // prob は Solution::type_ が参照するため、finalPareto 生成後まで生かす
+    using StratResult = std::pair<SolutionSet*, RCPSP_Problem*>;
+    std::vector<std::future<StratResult>> futures;
+    futures.reserve(numStr);
 
     for (int s = 1; s <= numStr; ++s) {
-        cout << "  [" << encTag << " Strategy " << s << "/" << numStr << "]\n";
-
-        prob->setStrategy(s);
-        prob->resetEvalCounter();
-        prob->clearStartTimesCache();
-
-        Algorithm *algo = new NSGAII(prob);
-        int popSz  = populationSize;
-        int maxEv  = evalsPerStrategy;
-        int lsFlag = 0;
-        algo->setInputParameter("populationSize", &popSz);
-        algo->setInputParameter("maxEvaluations", &maxEv);
-        algo->setInputParameter("useLocalSearch",  &lsFlag);
-
-        if (prob_ms)
-            attachMaxShiftOps(algo, prob_ms);
-        else
-            attachSchedObjOps(algo, prob);
-
-        SolutionSet *pop = algo->execute();
+        futures.push_back(std::async(std::launch::async,
+            [makeProb, s, numStr, populationSize, evalsPerStrategy, encTag]()
+            -> StratResult
         {
-            Ranking ranking(pop);
-            if (ranking.getNumberOfSubfronts() > 0) {
-                SolutionSet *f0 = ranking.getSubfront(0);
-                cout << "    Pareto front size: " << f0->size() << "\n";
-                for (int i = 0; i < f0->size(); ++i)
-                    combined->add(new Solution(f0->get(i)));
+            auto [prob, prob_ms] = makeProb(s);
+
+            syncPrint("  [" + encTag + " Strategy " + std::to_string(s)
+                      + "/" + std::to_string(numStr) + "]\n");
+
+            prob->resetEvalCounter();
+
+            Algorithm *algo = new NSGAII(prob);
+            int popSz  = populationSize;
+            int maxEv  = evalsPerStrategy;
+            int lsFlag = 0;
+            algo->setInputParameter("populationSize", &popSz);
+            algo->setInputParameter("maxEvaluations", &maxEv);
+            algo->setInputParameter("useLocalSearch",  &lsFlag);
+
+            if (prob_ms)
+                attachMaxShiftOps(algo, prob_ms);
+            else
+                attachSchedObjOps(algo, prob);
+
+            SolutionSet *pop = algo->execute();
+
+            SolutionSet *result = new SolutionSet(populationSize * 4);
+            {
+                Ranking ranking(pop);
+                if (ranking.getNumberOfSubfronts() > 0) {
+                    SolutionSet *f0 = ranking.getSubfront(0);
+                    syncPrint("    [" + encTag + " S" + std::to_string(s)
+                              + "] Pareto front size: "
+                              + std::to_string(f0->size()) + "\n");
+                    for (int i = 0; i < f0->size(); ++i)
+                        result->add(new Solution(f0->get(i)));
+                }
+            }
+            delete pop;
+            delete algo;
+            // prob は呼び出し元で delete する（Solution::type_ のダングリング防止）
+
+            return {result, prob};
+        }));
+    }
+
+    // ---- 結果を収集（prob はまだ生きている）----
+    SolutionSet *combined = new SolutionSet(numStr * populationSize * 4);
+    std::vector<RCPSP_Problem*> probsToDelete;
+    probsToDelete.reserve(numStr);
+
+    for (int s = 0; s < numStr; ++s) {
+        auto [stratResult, prob] = futures[s].get();
+        for (int i = 0; i < stratResult->size(); ++i)
+            combined->add(new Solution(stratResult->get(i)));  // type_ 有効
+        delete stratResult;
+        probsToDelete.push_back(prob);
+    }
+
+    // ---- 診断ログ ----
+    {
+        double minMs = 1e9, maxMs = -1e9;
+        double minCost = 1e9, maxCost = -1e9;
+        int validCount = 0;
+        for (int i = 0; i < combined->size(); ++i) {
+            Solution *sol = combined->get(i);
+            double ms   = sol->getObjective(0);
+            double cost = sol->getObjective(1);
+            if (ms < 1e8) {
+                minMs   = std::min(minMs,   ms);
+                maxMs   = std::max(maxMs,   ms);
+                minCost = std::min(minCost, cost);
+                maxCost = std::max(maxCost, cost);
+                ++validCount;
             }
         }
-        delete pop;
-        delete algo;
+        syncPrint("  [DIAG:" + encTag + "]"
+                  + "  combined_valid=" + std::to_string(validCount)
+                  + "  makespan=[" + std::to_string((int)minMs)
+                  + ", " + std::to_string((int)maxMs) + "]"
+                  + "  cost=[" + std::to_string(minCost)
+                  + ", " + std::to_string(maxCost) + "]\n");
     }
 
     SolutionSet *finalPareto = new SolutionSet(combined->size());
@@ -246,11 +314,17 @@ SolutionSet* runStrategies(RCPSP_Problem *prob,
         if (finalR.getNumberOfSubfronts() > 0) {
             SolutionSet *f0 = finalR.getSubfront(0);
             for (int i = 0; i < f0->size(); ++i)
-                finalPareto->add(new Solution(f0->get(i)));
+                finalPareto->add(new Solution(f0->get(i)));  // type_ まだ有効
         }
     }
     delete combined;
-    cout << "[DONE] " << encTag << "  Pareto size=" << finalPareto->size() << "\n";
+
+    // ---- finalPareto 生成後に prob を削除 ----
+    for (RCPSP_Problem *p : probsToDelete)
+        delete p;
+
+    syncPrint("[DONE] " + encTag
+              + "  Pareto size=" + std::to_string(finalPareto->size()) + "\n");
     return finalPareto;
 }
 
@@ -303,23 +377,29 @@ SolutionSet* EncodingComparisonRunner_P1::runEncoding(int enc) const {
          << "  numStrategies=" << numStr << "\n";
     cout << "------------------------------------------------------------\n";
 
-    RCPSP_Problem        *prob   = nullptr;
-    RCPSP_Problem_MaxShift *probMS = nullptr;
+    const string &instFile = cfg_.instanceFile;
+    const double  rr       = cfg_.rr;
+    const bool    rv       = cfg_.rv;
+    const int     evals    = cfg_.evalsPerStrategy;
 
+    EncUtil::ProbFactory factory;
     if (enc == 0) {
-        prob = new RCPSP_Problem(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
-        prob->setMaxEvaluations(cfg_.evalsPerStrategy);
+        factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
+            auto *p = new RCPSP_Problem(instFile, s, rr, rv);
+            p->setMaxEvaluations(evals);
+            return {p, nullptr};
+        };
     } else {
-        probMS = new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
-        probMS->setMaxEvaluations(cfg_.evalsPerStrategy);
-        prob = probMS;
+        factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
+            auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv);
+            p->setMaxEvaluations(evals);
+            return {p, p};
+        };
     }
 
     SolutionSet *pareto = EncUtil::runStrategies(
-            prob, probMS, numStr,
+            factory, numStr,
             cfg_.populationSize, cfg_.evalsPerStrategy, encTag);
-
-    delete prob;  // probMS は prob と同一ポインタ
     return pareto;
 }
 
@@ -453,39 +533,49 @@ SolutionSet* EncodingComparisonRunner_All::runEncoding(
          << "  numStrategies=" << numStr << "\n";
     cout << "------------------------------------------------------------\n";
 
-    RCPSP_Problem          *prob   = nullptr;
-    RCPSP_Problem_MaxShift *probMS = nullptr;
-
+    const string &instFile = cfg_.instanceFile;
+    const double  rr       = cfg_.rr;
+    const bool    rv       = cfg_.rv;
+    const int     evals    = cfg_.evalsPerStrategy;
     ActivitySplittingMode mode = (splitMode == "P2")
         ? ActivitySplittingMode::P2 : ActivitySplittingMode::P3;
+    const bool isP1 = (splitMode == "P1");
 
-    if (splitMode == "P1") {
+    EncUtil::ProbFactory factory;
+    if (isP1) {
         if (enc == 0) {
-            prob = new RCPSP_Problem(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
+            factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
+                auto *p = new RCPSP_Problem(instFile, s, rr, rv);
+                p->setMaxEvaluations(evals);
+                return {p, nullptr};
+            };
         } else {
-            probMS = new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, cfg_.rr, cfg_.rv);
-            prob   = probMS;
+            factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
+                auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv);
+                p->setMaxEvaluations(evals);
+                return {p, p};
+            };
         }
     } else {
-        // P2 or P3
         if (enc == 0) {
-            prob = new RCPSP_Problem_Splitting(
-                    cfg_.instanceFile, mode, 1, cfg_.rr, cfg_.rv);
+            factory = [instFile, mode, rr, rv, evals](int s) -> EncUtil::ProbPair {
+                auto *p = new RCPSP_Problem_Splitting(instFile, mode, s, rr, rv);
+                p->setMaxEvaluations(evals);
+                return {p, nullptr};
+            };
         } else {
-            auto *p = new RCPSP_Problem_Splitting_MaxShift(
-                    cfg_.instanceFile, mode, 1, cfg_.rr, cfg_.rv);
-            probMS = p;
-            prob   = p;
+            factory = [instFile, mode, rr, rv, evals](int s) -> EncUtil::ProbPair {
+                auto *p = new RCPSP_Problem_Splitting_MaxShift(instFile, mode, s, rr, rv);
+                p->setMaxEvaluations(evals);
+                return {(RCPSP_Problem*)p, p};
+            };
         }
     }
-    prob->setMaxEvaluations(cfg_.evalsPerStrategy);
 
     SolutionSet *pareto = EncUtil::runStrategies(
-            prob, probMS, numStr,
+            factory, numStr,
             cfg_.populationSize, cfg_.evalsPerStrategy,
             splitMode + "_" + encTag);
-
-    delete prob;
     return pareto;
 }
 

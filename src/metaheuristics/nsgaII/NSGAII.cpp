@@ -8,6 +8,7 @@
 #include <random>
 #include <stdexcept>
 #include <vector>
+#include <thread>
 
 
 #include "problems/RCPSP_Problem.h"
@@ -119,15 +120,19 @@ SolutionSet *NSGAII::execute() {
     // ---- タスク1: 世代ログ準備 (MaxShift 診断) ----
     // generation_log.csv に append。4戦略分が同一ファイルに蓄積される。
     // run_id は静的カウンタで管理し、ヘッダーは最初の1回のみ書く。
-    static int  sRunId         = 0;
-    static bool sHeaderWritten = false;
+    static thread_local int  sRunId         = 0;
+    static thread_local bool sHeaderWritten = false;
     ++sRunId;
     const bool msMode = (dynamic_cast<RCPSP_Problem_MaxShift*>(problem_) != nullptr);
     int genCount = 0;
     std::ofstream genLog;
     if (msMode) {
-        genLog.open("generation_log.csv",
-                    sRunId == 1 ? std::ios::trunc : std::ios::app);
+        {
+            int stratId = dynamic_cast<RCPSP_Problem*>(problem_)->getStrategy();
+            std::string logFileName = "generation_log_s" + std::to_string(stratId) + ".csv";
+            genLog.open(logFileName,
+                        sRunId == 1 ? std::ios::trunc : std::ios::app);
+        }
         if (!sHeaderWritten && genLog.is_open()) {
             genLog << "run_id,generation,avg_max_shift,min_makespan_in_front,"
                       "count_all_zero_shift,min_max_shift,max_max_shift\n";
@@ -195,15 +200,16 @@ SolutionSet *NSGAII::execute() {
 
 
 
-            offspringPopulation->add(new Solution(c1));
-            if (offspringPopulation->size() < populationSize)
-                offspringPopulation->add(new Solution(c2));
-//            else {
-//                // 奇数個体数の場合、最後の1個は追加しない
-//                delete c2;
-//            }
-            delete offs[0];
-            delete offs[1];
+            offspringPopulation->add(c1);
+            if (offspringPopulation->size() < populationSize) {
+                offspringPopulation->add(c2);
+            } else {
+                delete c2;
+            }
+            //            else {
+            //                // 奇数個体数の場合、最後の1個は追加しない
+            //                delete c2;
+            //            }
             delete [] offs;
 
             evaluations += 2;
@@ -232,7 +238,8 @@ SolutionSet *NSGAII::execute() {
                 remain -= front->size();
             } else {
                 ranking.crowdingDistanceAssignment(front, problem_->getNumberOfObjectives());
-                front->sort(new CrowdingDistanceComparator());
+                CrowdingDistanceComparator cdcLocal;
+                front->sort(&cdcLocal);
                 for (int k = 0; k < remain; ++k)
                     nextGen->add(new Solution(front->get(k)));
                 remain = 0;

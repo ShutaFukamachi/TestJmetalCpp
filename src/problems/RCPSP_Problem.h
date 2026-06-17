@@ -5,7 +5,6 @@
 #include "core/Problem.h"
 #include "Solution.h"
 #include "RCPSP_Reader.h"
-#include <map>
 #include <string>
 #include <vector>
 
@@ -23,6 +22,8 @@ public:
                             int    strategy = 4,
                             double rr       = 0.0,
                             bool   rv       = false);
+
+    ~RCPSP_Problem() override;
 
     void evaluate(Solution *solution) override;
 
@@ -73,8 +74,9 @@ public:
 
     // 戦略切り替え・カウンタリセット（4戦略独立実行用）
     virtual void setStrategy(int s) { strategy_ = s; }
+    int  getStrategy() const { return strategy_; }
     void resetEvalCounter()      { evalCounter_ = 0; }
-    void clearStartTimesCache()  { startTimesCache_.clear(); }
+    void clearStartTimesCache()  {} // キャッシュ廃止済み（solution->startTimes_ で代替）
 
     // 出力用再評価: maxShift を固定値に上書きする（-1 で通常のランダム動作に戻す）
     //   0     → ESS（全ジョブ最早時刻）
@@ -109,9 +111,6 @@ protected:
 private:
     int  numberOfJobs_       = 0;
 
-    // evaluate() で確定した実際の開始時刻をキャッシュする
-    // computeStartTimes() はこれを優先して返す
-    mutable std::map<Solution*, std::vector<int>> startTimesCache_;
 };
 
 #endif // RCPSP_PROBLEM_H

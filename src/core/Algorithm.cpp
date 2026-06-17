@@ -4,7 +4,10 @@
 Algorithm::Algorithm(Problem *problem) : problem_(problem) {}
 
 Algorithm::~Algorithm() {
-
+    for (auto& pair : operators_) {
+        delete pair.second;
+    }
+    operators_.clear();
 }
 
 void Algorithm::addOperator(std::string name, Operator *op) { operators_[name] = op; }

@@ -33,7 +33,7 @@ void * MaxShiftMutation::execute(void * object) {
     for (int j = 1; j < nJobs - 1; ++j) {
         if (prob01(gen) >= probability) continue;
 
-        // seq 内での job j の現在位置
+        // seq 内での job j の現在位置1
         int cur_pos = -1;
         for (int i = 0; i < nJobs; ++i) {
             if (seq[i] == j) { cur_pos = i; break; }
