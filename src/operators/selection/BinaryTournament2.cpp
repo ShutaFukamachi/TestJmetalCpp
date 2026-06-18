@@ -1,4 +1,5 @@
 #include "BinaryTournament2.h"
+#include "SolutionSet.h"
 #include "CrowdingDistanceComparator.h"
 #include <random>
 

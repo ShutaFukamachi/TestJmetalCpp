@@ -394,9 +394,7 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
 }
 
 RCPSP_Problem::~RCPSP_Problem() {
-    delete[] lowerLimit_;
-    delete[] upperLimit_;
-    delete solutionType_;
+    // lowerLimit_, upperLimit_ are std::vector — no manual delete needed
 }
 
 // ============================================================

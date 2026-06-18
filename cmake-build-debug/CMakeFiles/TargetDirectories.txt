@@ -7,5 +7,6 @@ C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGASetup
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGACompCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAMaxShiftCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAEncCpp.dir
+C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/NSGAMaxShiftDurCpp.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/edit_cache.dir
 C:/Users/PC2504/TestProject/TestJmetalCpp/cmake-build-debug/CMakeFiles/rebuild_cache.dir

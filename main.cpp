@@ -595,7 +595,7 @@ void EncodingComparisonRunner_All::runAll() const {
         {0.75, false}, {0.75, true},
     };
     const vector<string>       splitModes = {"P1", "P2", "P3"};
-    const vector<pair<int,string>> encodings = {{0,"SchedObj"},{1,"MaxShift"}};
+    const vector<pair<int,string>> encodings = {/*{0,"SchedObj"},*/{1,"MaxShift"}};  // 計算時間比較のため SchedObj を一時無効化
 
     cout << "\n============================================================\n";
     cout << " All Encoding Comparison Run (P1/P2/P3 x SchedObj/MaxShift)\n";

@@ -76,6 +76,9 @@ add_executable(NSGAMaxShiftCpp main_NSGAII_RCPSP_MaxShift.cpp
 add_executable(NSGAEncCpp main_NSGAII_RCPSP_EncodingComparison.cpp
 )
 
+add_executable(NSGAMaxShiftDurCpp main_NSGAII_RCPSP_MaxShiftDur.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
@@ -136,6 +139,14 @@ target_link_libraries(NSGAMaxShiftCpp PRIVATE
 )
 
 target_link_libraries(NSGAEncCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(NSGAMaxShiftDurCpp PRIVATE
         jmetalcpp
 
         gurobi130
