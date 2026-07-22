@@ -55,28 +55,16 @@ target_include_directories(jmetalcpp PUBLIC
 add_executable(TestJmetalCpp main.cpp
 )
 
-add_executable(BnBJmetalCpp main_BnB_RCPSP_with_TimeWindow_ResourceChange.cpp
-)
-
-add_executable(NSGAJmetalCpp main_NSGAII_RCPSP_with_TimeWindow_ResourceChange.cpp
-)
-
-add_executable(NSGASplitCpp main_NSGAII_RCPSP_ActivitySplitting.cpp
-)
-
-add_executable(NSGASetupCpp main_NSGAII_RCPSP_Setup.cpp
-)
-
-add_executable(NSGACompCpp main_NSGAII_RCPSP_Comparison.cpp
-)
-
-add_executable(NSGAMaxShiftCpp main_NSGAII_RCPSP_MaxShift.cpp
-)
-
 add_executable(NSGAEncCpp main_NSGAII_RCPSP_EncodingComparison.cpp
 )
 
 add_executable(NSGAMaxShiftDurCpp main_NSGAII_RCPSP_MaxShiftDur.cpp
+)
+
+add_executable(A3AB main_A3_AB.cpp
+)
+
+add_executable(E17 main_E17_PlacementExact.cpp
 )
 
 
@@ -84,54 +72,6 @@ add_executable(NSGAMaxShiftDurCpp main_NSGAII_RCPSP_MaxShiftDur.cpp
 target_link_libraries(TestJmetalCpp PRIVATE
         jmetalcpp
 
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(BnBJmetalCpp PRIVATE
-        jmetalcpp
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(NSGAJmetalCpp PRIVATE
-        jmetalcpp
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(NSGASplitCpp PRIVATE
-        jmetalcpp
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(NSGASetupCpp PRIVATE
-        jmetalcpp
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(NSGACompCpp PRIVATE
-        jmetalcpp
-
-        gurobi130
-        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
-        $<$<CONFIG:Release>:gurobi_c++md2017>
-)
-
-target_link_libraries(NSGAMaxShiftCpp PRIVATE
-        jmetalcpp
 
         gurobi130
         $<$<CONFIG:Debug>:gurobi_c++mdd2017>
@@ -146,7 +86,56 @@ target_link_libraries(NSGAEncCpp PRIVATE
         $<$<CONFIG:Release>:gurobi_c++md2017>
 )
 
+target_link_libraries(A3AB PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(E17 PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
 target_link_libraries(NSGAMaxShiftDurCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+add_executable(NSGAMaxShiftCpp main_NSGAII_RCPSP_MaxShift.cpp
+)
+
+target_link_libraries(NSGAMaxShiftCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+add_executable(NSGAMaxShiftSegCpp main_NSGAII_RCPSP_MaxShiftSeg.cpp
+)
+
+target_link_libraries(NSGAMaxShiftSegCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+add_executable(RCPSPMIPCpp main_MIP_RCPSP.cpp
+)
+
+target_link_libraries(RCPSPMIPCpp PRIVATE
         jmetalcpp
 
         gurobi130

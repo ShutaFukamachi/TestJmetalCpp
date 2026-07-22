@@ -2,13 +2,18 @@
 #include "Ranking.h"
 #include "CrowdingDistanceComparator.h"
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <vector>
 #include <thread>
+
+namespace fs = std::filesystem;
 
 
 #include "problems/RCPSP_Problem.h"
@@ -37,11 +42,22 @@ SolutionSet *NSGAII::execute() {
     // makespanBiasProb   : 交叉時に片親を makespan 最小解に固定する確率 (デフォルト 0.10)
     int    eliteMakespanSlots = 2;
     double makespanBiasProb   = 0.10;
+    // noveltyFilter: true のとき「2個ずつ生成 → 親世代にないスケジュールのみ採用」に切り替わる
+    // false（デフォルト）のときは従来の NSGA-II と完全に同一動作
+    bool   noveltyFilter      = false;
+    // a1PrioritySeed: A1 priority-rule シードの ON/OFF（デフォルト OFF=0）。
+    // 1 を渡すと LFT/MTS/GRPW 優先規則順列を初期集団に注入する。
+    // （旧 A3 ランダム選抜シードは A1 に劣位・不採用のため 2026-07-22 に削除）
+    bool   a1PrioritySeed     = false;
     {
         void *p = getInputParameter("eliteMakespanSlots");
         if (p) eliteMakespanSlots = *static_cast<int *>(p);
         p = getInputParameter("makespanBiasProb");
         if (p) makespanBiasProb = *static_cast<double *>(p);
+        p = getInputParameter("noveltyFilter");
+        if (p) noveltyFilter = (*static_cast<int *>(p) != 0);
+        p = getInputParameter("a1PrioritySeed");
+        if (p) a1PrioritySeed = (*static_cast<int *>(p) != 0);
     }
     static thread_local std::mt19937 rng_ms{std::random_device{}()};
     std::uniform_real_distribution<> d01_ms(0.0, 1.0);
@@ -101,6 +117,38 @@ SolutionSet *NSGAII::execute() {
         std::cout << "[NSGAII] Injected " << (nExtremes * 2) << " extreme seed solutions\n";
     }
 
+    // ---- A1: priority-rule シード ----
+    // LFT/MTS/GRPW の優先規則順列を初期集団に注入する。
+    // 各規則につき複数個体を生成（タイブレーク乱数で多様化）。
+    RCPSP_Problem_MaxShift* a1Prob =
+        a1PrioritySeed ? dynamic_cast<RCPSP_Problem_MaxShift*>(problem_) : nullptr;
+    if (auto msProb = a1Prob) {
+        const int perRule   = 4;   // 各規則あたりの生成数
+        const int halfT     = msProb->getEffectiveHalfT();
+        const int nJobs     = msProb->getNumJobs();
+        double bestA1ms = std::numeric_limits<double>::max();
+        int    injected = 0;
+        for (int rule = 0; rule < 3 && filled < populationSize; ++rule) {
+            for (int k = 0; k < perRule && filled < populationSize; ++k) {
+                Solution *sol = msProb->createPriorityRuleSolution(rule);
+                // 半分は max_shift=0、半分は Uniform[0, halfT] を付与（コスト多様性）
+                if (k % 2 == 1 && halfT > 0) {
+                    std::uniform_int_distribution<int> msDist(0, halfT);
+                    auto &vars = sol->getVars();
+                    for (int j = 1; j < nJobs - 1; ++j)
+                        vars[nJobs + j] = msDist(rng_ms);
+                }
+                msProb->evaluate(sol);
+                bestA1ms = std::min(bestA1ms, sol->getObjective(0));
+                population->add(sol);
+                ++filled;
+                ++injected;
+            }
+        }
+        std::cout << "[NSGAII] A1 Priority-Rule Seed: injected "
+                  << injected << " (LFT/MTS/GRPW), best ms=" << bestA1ms << "\n";
+    }
+
     //ランダムトポロジカルソートで生成
     for (; filled < populationSize; ++filled) {
         Solution *sol = nullptr;
@@ -129,7 +177,9 @@ SolutionSet *NSGAII::execute() {
     if (msMode) {
         {
             int stratId = dynamic_cast<RCPSP_Problem*>(problem_)->getStrategy();
-            std::string logFileName = "generation_log_s" + std::to_string(stratId) + ".csv";
+            const std::string logDir = "logs/generation/";
+            fs::create_directories(logDir);
+            std::string logFileName = logDir + "generation_log_s" + std::to_string(stratId) + ".csv";
             genLog.open(logFileName,
                         sRunId == 1 ? std::ios::trunc : std::ios::app);
         }
@@ -137,6 +187,58 @@ SolutionSet *NSGAII::execute() {
             genLog << "run_id,generation,avg_max_shift,min_makespan_in_front,"
                       "count_all_zero_shift,min_max_shift,max_max_shift\n";
             sHeaderWritten = true;
+        }
+    }
+
+    // ---- innovation ログ準備 (有効イノベーション率) ----
+    std::ofstream innovLog;
+
+    // ---- many-to-one ログ準備 (全エンコーディング共通) ----
+    // manytoone_log_s{stratId}.csv: 世代ごとに母集団内の
+    // 「actList が異なるがスケジュール(startTimes_)が同じ」解の数を記録する
+    std::ofstream m2oLog;
+    // noveltyFilter ON のときはログ名に _NF を付けて既存ログと区別する
+    // encodingName() で派生クラスごとに固有のタグを返す
+    std::string encTag = "SchedObj";
+    if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+        encTag = rcpsp->encodingName();
+    }
+    if (noveltyFilter) encTag += "_NF";
+    {
+        if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+            int stratId = rcpsp->getStrategy();
+            const std::string &inst = rcpsp->getInstancePrefix();
+            const std::string m2oDir = "logs/manytoone/";
+            fs::create_directories(m2oDir);
+            std::string m2oFileName = m2oDir + "manytoone_log_" + inst
+                                      + "_s" + std::to_string(stratId)
+                                      + "_" + encTag + ".csv";
+            const bool doTrunc = (sRunId == 1);
+            m2oLog.open(m2oFileName, doTrunc ? std::ios::trunc : std::ios::app);
+            if (m2oLog.is_open() && doTrunc) {
+                m2oLog << "# run_id       : trial index (which independent run)\n"
+                          "# generation   : generation number (1-based)\n"
+                          "# total_pop    : population size\n"
+                          "# unique_scheds: number of unique schedules (startTimes) in population\n"
+                          "# dup_sol_count: solutions in groups where 2+ distinct actLists\n"
+                          "#                map to the same schedule\n"
+                          "# dup_percent  : dup_sol_count / total_pop * 100 (%)\n"
+                          "run_id,generation,total_pop,unique_scheds,"
+                          "dup_sol_count,dup_percent\n";
+            }
+
+            // innovation ログファイルオープン
+            const std::string innovDir = "logs/innovation/";
+            fs::create_directories(innovDir);
+            std::string innovFileName = innovDir + "innovation_log_" + inst
+                                        + "_s" + std::to_string(stratId)
+                                        + "_" + encTag + ".csv";
+            innovLog.open(innovFileName, doTrunc ? std::ios::trunc : std::ios::app);
+            if (innovLog.is_open() && doTrunc) {
+                innovLog << "run_id,generation,offspring_evaluated,offspring_accepted,"
+                            "novel_sched,dominates_parent,nondominated_vs_parents,"
+                            "improves_extremes\n";
+            }
         }
     }
 
@@ -160,60 +262,184 @@ SolutionSet *NSGAII::execute() {
             }
         }
 
-        for (int i = 0; i < populationSize && evaluations < maxEvaluations; i += 2) {
-            // ---- B: makespan 最小解を親の一方に固定（確率 makespanBiasProb）----
-            Solution *p1;
-            if (msMode && makespanMinSol && d01_ms(rng_ms) < makespanBiasProb)
-                p1 = makespanMinSol;
-            else
-                p1 = (Solution *)selectionOperator->execute(population);
-            Solution *p2 = (Solution *)selectionOperator->execute(population);
+        // ---- innovation ログ用: 親世代の情報を収集 ----
+        // 親スケジュール集合（novel_sched 判定用）
+        std::set<std::vector<int>> parentSchedsForInnov;
+        // 親目的値ペア（支配判定用）
+        std::vector<std::pair<double,double>> parentObjs;
+        double parentMinMakespan = std::numeric_limits<double>::max();
+        double parentMinCost     = std::numeric_limits<double>::max();
+        // innovation カウンタ
+        int innov_offspring_evaluated = 0;
+        int innov_offspring_accepted  = 0;
+        int innov_novel_sched         = 0;
+        int innov_dominates_parent    = 0;
+        int innov_nondominated        = 0;
+        int innov_improves_extremes   = 0;
 
-            void **parents = new void*[2];
-            parents[0] = p1;
-            parents[1] = p2;
-
-            void **offs = (void **)crossoverOperator->execute(parents);
-            delete [] parents;
-
-            Solution *c1 = (Solution *)offs[0];
-            Solution *c2 = (Solution *)offs[1];
-//            delete [] offs;
-
-            mutationOperator->execute(c1);
-            mutationOperator->execute(c2);
-
-            problem_->evaluate(c1);
-            problem_->evaluate(c2);
-
-            // ここで RCPSP 用の局所探索を追加
-            // if (useLocalSearch) {
-            //     if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
-            //         // -1 or 0 なら「改善できなくなるまで」
-            //         rcpsp->localSearchOnActivityOrder(c1, -1);
-            //         rcpsp->localSearchOnActivityOrder(c2, -1);
-            //
-            //         rcpsp->localSearchOnSchedObj(c1, -1);
-            //         rcpsp->localSearchOnSchedObj(c2, -1);
-            //     }
-            // }
-
-
-
-            offspringPopulation->add(c1);
-            if (offspringPopulation->size() < populationSize) {
-                offspringPopulation->add(c2);
-            } else {
-                delete c2;
+        if (innovLog.is_open()) {
+            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+                for (int i = 0; i < population->size(); ++i) {
+                    Solution *s = population->get(i);
+                    if (!s->startTimes_.empty())
+                        parentSchedsForInnov.insert(s->startTimes_);
+                    double ms = s->getObjective(0);
+                    double co = s->getObjective(1);
+                    parentObjs.push_back({ms, co});
+                    if (ms < parentMinMakespan) parentMinMakespan = ms;
+                    if (co < parentMinCost)     parentMinCost = co;
+                }
             }
-            //            else {
-            //                // 奇数個体数の場合、最後の1個は追加しない
-            //                delete c2;
-            //            }
-            delete [] offs;
-
-            evaluations += 2;
         }
+
+        // innovation 記録ラムダ: 子1体の評価直後に呼ぶ
+        auto recordChild = [&](Solution *child, bool accepted) {
+            if (!innovLog.is_open()) return;
+            ++innov_offspring_evaluated;
+            if (accepted) ++innov_offspring_accepted;
+            double cMs = child->getObjective(0);
+            double cCo = child->getObjective(1);
+            // 1e9 フォールバック解は除外
+            if (cMs >= 1e8) return;
+            // novel_sched
+            if (!child->startTimes_.empty()
+                && parentSchedsForInnov.find(child->startTimes_) == parentSchedsForInnov.end()) {
+                ++innov_novel_sched;
+            }
+            // dominates_parent: 親の少なくとも1解を支配するか
+            bool dominatesAny = false;
+            bool dominatedByAny = false;
+            for (auto &[pMs, pCo] : parentObjs) {
+                // child dominates parent: 両目的 ≤ かつ少なくとも一方で <
+                if (cMs <= pMs && cCo <= pCo && (cMs < pMs || cCo < pCo)) {
+                    dominatesAny = true;
+                }
+                // parent dominates child
+                if (pMs <= cMs && pCo <= cCo && (pMs < cMs || pCo < cCo)) {
+                    dominatedByAny = true;
+                }
+            }
+            if (dominatesAny) ++innov_dominates_parent;
+            if (!dominatedByAny) ++innov_nondominated;
+            // improves_extremes
+            if (cMs < parentMinMakespan || cCo < parentMinCost) {
+                ++innov_improves_extremes;
+            }
+        };
+
+        if (noveltyFilter) {
+            // ================================================================
+            // ノベルティフィルタ版
+            //   2 個ずつ生成 → 突然変異まで一気に適用 →
+            //   親世代にないスケジュール(startTimes_)の解のみ子孫集団に追加
+            //   最大 5×populationSize 回試行で打ち切り
+            //   (重複率が高い後半世代でも無限ループしない)
+            // ================================================================
+            std::set<std::vector<int>> parentScheds;
+            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+                for (int i = 0; i < population->size(); ++i) {
+                    Solution *s = population->get(i);
+                    if (!s->startTimes_.empty())
+                        parentScheds.insert(s->startTimes_);
+                }
+            }
+
+            const int maxTries = 5 * populationSize;
+            int tries = 0;
+            while (offspringPopulation->size() < populationSize
+                   && evaluations < maxEvaluations
+                   && tries < maxTries) {
+                ++tries;
+
+                // ---- B: makespan バイアス（元のコードと同じ）----
+                Solution *p1;
+                if (msMode && makespanMinSol && d01_ms(rng_ms) < makespanBiasProb)
+                    p1 = makespanMinSol;
+                else
+                    p1 = (Solution *)selectionOperator->execute(population);
+                Solution *p2 = (Solution *)selectionOperator->execute(population);
+
+                void **parents = new void*[2];
+                parents[0] = p1;
+                parents[1] = p2;
+                void **offs = (void **)crossoverOperator->execute(parents);
+                delete[] parents;
+
+                Solution *c1 = (Solution *)offs[0];
+                Solution *c2 = (Solution *)offs[1];
+                delete[] offs;
+
+                mutationOperator->execute(c1);
+                mutationOperator->execute(c2);
+                problem_->evaluate(c1);
+                problem_->evaluate(c2);
+                evaluations += 2;
+
+                // 親世代にないスケジュールなら採用、あれば破棄
+                bool c1Novel = c1->startTimes_.empty()
+                               || parentScheds.find(c1->startTimes_) == parentScheds.end();
+                bool c2Novel = c2->startTimes_.empty()
+                               || parentScheds.find(c2->startTimes_) == parentScheds.end();
+
+                bool c1Accepted = c1Novel && offspringPopulation->size() < populationSize;
+                if (c1Accepted)
+                    offspringPopulation->add(c1);
+
+                recordChild(c1, c1Accepted);
+                if (!c1Accepted) delete c1;
+
+                bool c2Accepted = c2Novel && offspringPopulation->size() < populationSize;
+                if (c2Accepted)
+                    offspringPopulation->add(c2);
+
+                recordChild(c2, c2Accepted);
+                if (!c2Accepted) delete c2;
+            }
+
+        } else {
+            // ================================================================
+            // 元の NSGA-II 子孫生成（変更なし）
+            // ================================================================
+            for (int i = 0; i < populationSize && evaluations < maxEvaluations; i += 2) {
+                // ---- B: makespan 最小解を親の一方に固定（確率 makespanBiasProb）----
+                Solution *p1;
+                if (msMode && makespanMinSol && d01_ms(rng_ms) < makespanBiasProb)
+                    p1 = makespanMinSol;
+                else
+                    p1 = (Solution *)selectionOperator->execute(population);
+                Solution *p2 = (Solution *)selectionOperator->execute(population);
+
+                void **parents = new void*[2];
+                parents[0] = p1;
+                parents[1] = p2;
+
+                void **offs = (void **)crossoverOperator->execute(parents);
+                delete [] parents;
+
+                Solution *c1 = (Solution *)offs[0];
+                Solution *c2 = (Solution *)offs[1];
+
+                mutationOperator->execute(c1);
+                mutationOperator->execute(c2);
+
+                problem_->evaluate(c1);
+                problem_->evaluate(c2);
+
+                offspringPopulation->add(c1);
+                recordChild(c1, true);
+
+                if (offspringPopulation->size() < populationSize) {
+                    offspringPopulation->add(c2);
+                    recordChild(c2, true);
+                } else {
+                    recordChild(c2, false);
+                    delete c2;
+                }
+                delete [] offs;
+
+                evaluations += 2;
+            }
+        } // end noveltyFilter branch
 
         // 親 + 子 = unionPopulation
         unionPopulation = new SolutionSet(population->size() + offspringPopulation->size());
@@ -300,8 +526,8 @@ SolutionSet *NSGAII::execute() {
         population = nextGen;
 
         // ---- タスク1: 世代ごとの統計をログ ----
+        ++genCount;
         if (msMode && genLog.is_open()) {
-            ++genCount;
             auto *msProb = dynamic_cast<RCPSP_Problem_MaxShift*>(problem_);
             const int nJobs = msProb->getNumJobs();
             const int popSz = population->size();
@@ -336,6 +562,61 @@ SolutionSet *NSGAII::execute() {
                    << static_cast<int>(minMakespan) << "," << cntAllZero << ","
                    << minShift << "," << maxShift << "\n";
             if (genCount % 50 == 0) genLog.flush();  // 毎世代 flush は I/O 負荷過大のため 50 世代ごとに変更
+        }
+
+        // ---- many-to-one 集計: actList が違うがスケジュールが同じ解を数える ----
+        // 出力列:
+        //   total_pop     : 母集団サイズ
+        //   unique_scheds : 母集団内のユニーク startTimes_ 数
+        //   dup_sol_count : 「同一スケジュールで異なるactListを持つグループ」に
+        //                   属する解の総数（何個中何個、の「何個」側）
+        //   dup_percent   : dup_sol_count / total_pop × 100
+        if (m2oLog.is_open()) {
+            if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
+                const int nJobs = rcpsp->getNumJobs();
+                const int popSz = population->size();
+
+                // startTimes_ -> actList の全リスト（重複あり）
+                std::map<std::vector<int>, std::vector<std::vector<int>>> schedToActLists;
+                for (int i = 0; i < popSz; ++i) {
+                    Solution *s = population->get(i);
+                    if (s->startTimes_.empty()) continue;
+                    const auto &vars = s->getVars();
+                    std::vector<int> actList(vars.begin(),
+                                             vars.begin() + std::min(nJobs, (int)vars.size()));
+                    schedToActLists[s->startTimes_].push_back(actList);
+                }
+
+                int uniqueScheds = static_cast<int>(schedToActLists.size());
+                // グループ内に2種類以上の distinct actList がある → many-to-one
+                // そのグループに属する解の総数（実際の解数）を数える
+                int dupGroupSols = 0;
+                for (auto &[sched, actLists] : schedToActLists) {
+                    std::set<std::vector<int>> distinct(actLists.begin(), actLists.end());
+                    if ((int)distinct.size() > 1) {
+                        dupGroupSols += static_cast<int>(actLists.size());
+                    }
+                }
+                double dupPct = (popSz > 0)
+                    ? 100.0 * dupGroupSols / static_cast<double>(popSz) : 0.0;
+
+                m2oLog << sRunId << "," << genCount << "," << popSz << ","
+                       << uniqueScheds << "," << dupGroupSols << ","
+                       << dupPct << "\n";
+                if (genCount % 50 == 0) m2oLog.flush();
+            }
+        }
+
+        // ---- innovation ログ書き込み ----
+        if (innovLog.is_open()) {
+            innovLog << sRunId << "," << genCount << ","
+                     << innov_offspring_evaluated << ","
+                     << innov_offspring_accepted << ","
+                     << innov_novel_sched << ","
+                     << innov_dominates_parent << ","
+                     << innov_nondominated << ","
+                     << innov_improves_extremes << "\n";
+            if (genCount % 50 == 0) innovLog.flush();
         }
     }
     setOutputParameter("evaluations", &evaluations);

@@ -2,6 +2,7 @@
 #include "Solution.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <iostream>
 #include <numeric>
@@ -368,5 +369,123 @@ Solution* RCPSP_Problem_MaxShift::createRandomTopoSolution() {
     if (n > 0 && n     < nVars) vars[n + 0] = 0;
     if (n > 1 && n+n-1 < nVars) vars[n + n - 1] = 0;
 
+    return sol;
+}
+
+// ============================================================
+//  createPriorityRuleSolution (A1: priority-rule シード)
+// ============================================================
+Solution* RCPSP_Problem_MaxShift::createPriorityRuleSolution(int rule) {
+    const int n     = getNumJobs();
+    const int nVars = getNumberOfVariables();
+    const auto &succ = instance.successors;
+    const auto &dur  = instance.duration;
+
+    // ---- 先行リスト (predecessors) と入次数 ----
+    std::vector<std::vector<int>> preds(n);
+    std::vector<int> indeg(n, 0);
+    for (int j = 0; j < n; ++j)
+        for (int s : succ[j])
+            if (s >= 0 && s < n) { preds[s].push_back(j); ++indeg[s]; }
+
+    // ---- トポロジカル順序 (Kahn, 決定論的) ----
+    std::vector<int> topo;
+    topo.reserve(n);
+    {
+        std::vector<int> deg = indeg;
+        std::vector<int> stack;
+        for (int j = 0; j < n; ++j) if (deg[j] == 0) stack.push_back(j);
+        while (!stack.empty()) {
+            int j = stack.back(); stack.pop_back();
+            topo.push_back(j);
+            for (int s : succ[j])
+                if (s >= 0 && s < n && --deg[s] == 0) stack.push_back(s);
+        }
+        if ((int)topo.size() != n) { topo.resize(n); std::iota(topo.begin(), topo.end(), 0); }
+    }
+
+    // ---- 各ジョブの優先度スコアを計算（高いほど先に選ぶ）----
+    std::vector<long long> score(n, 0);
+    if (rule == 0) {
+        // LFT: CPM で最遅完了時刻を求め、-LFT をスコアにする（LFT 小 = 優先）
+        std::vector<int> EF(n, 0), ES(n, 0);
+        for (int j : topo) {             // forward pass
+            int es = 0;
+            for (int p : preds[j]) es = std::max(es, EF[p]);
+            ES[j] = es; EF[j] = es + dur[j];
+        }
+        int CP = 0;
+        for (int j = 0; j < n; ++j) CP = std::max(CP, EF[j]);
+        std::vector<int> LF(n, CP);
+        for (auto it = topo.rbegin(); it != topo.rend(); ++it) {  // backward pass
+            int j = *it;
+            int lf = CP;
+            bool hasSucc = false;
+            for (int s : succ[j]) if (s >= 0 && s < n) {
+                hasSucc = true;
+                lf = std::min(lf, LF[s] - dur[s]);  // LS[s]
+            }
+            LF[j] = hasSucc ? lf : CP;
+        }
+        for (int j = 0; j < n; ++j) score[j] = -(long long)LF[j];
+    } else if (rule == 1) {
+        // MTS: 推移的後続数（多いほど優先）
+        for (int j = 0; j < n; ++j) {
+            std::vector<char> seen(n, 0);
+            std::vector<int> st = {j};
+            long long cnt = 0;
+            while (!st.empty()) {
+                int u = st.back(); st.pop_back();
+                for (int s : succ[u]) if (s >= 0 && s < n && !seen[s]) {
+                    seen[s] = 1; ++cnt; st.push_back(s);
+                }
+            }
+            score[j] = cnt;
+        }
+    } else {
+        // GRPW: d_j + Σ d_succ（大きいほど優先）
+        for (int j = 0; j < n; ++j) {
+            long long w = dur[j];
+            for (int s : succ[j]) if (s >= 0 && s < n) w += dur[s];
+            score[j] = w;
+        }
+    }
+
+    // ---- list-scheduling: eligible からスコア最良を選ぶ（同点は乱数）----
+    static thread_local std::mt19937 prRng{std::random_device{}()};
+    std::vector<int> deg = indeg;
+    std::vector<int> avail;
+    avail.reserve(n);
+    for (int j = 0; j < n; ++j) if (deg[j] == 0) avail.push_back(j);
+
+    std::vector<int> perm;
+    perm.reserve(n);
+    while (!avail.empty()) {
+        long long best = LLONG_MIN;
+        for (int j : avail) best = std::max(best, score[j]);
+        // 最良スコアの候補を集めて乱数で1つ選ぶ
+        std::vector<int> tiePos;
+        for (int k = 0; k < (int)avail.size(); ++k)
+            if (score[avail[k]] == best) tiePos.push_back(k);
+        std::uniform_int_distribution<int> dis(0, (int)tiePos.size() - 1);
+        int pick = tiePos[dis(prRng)];
+        int job  = avail[pick];
+        avail[pick] = avail.back();
+        avail.pop_back();
+        perm.push_back(job);
+        for (int s : succ[job])
+            if (s >= 0 && s < n && --deg[s] == 0) avail.push_back(s);
+    }
+    if ((int)perm.size() != n) { perm.resize(n); std::iota(perm.begin(), perm.end(), 0); }
+
+    // ---- Solution 構築: 活動リスト + max_shift=0（EST 配置）----
+    Solution *sol = new Solution(this);
+    auto &vars = sol->getVars();
+    for (int i = 0; i < n; ++i) vars[i] = perm[i];
+    for (int j = 0; j < n; ++j) {
+        int idx = n + j;
+        if (idx >= nVars) break;
+        vars[idx] = 0;
+    }
     return sol;
 }

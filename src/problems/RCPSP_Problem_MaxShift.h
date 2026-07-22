@@ -54,6 +54,18 @@ public:
     // 極端解シード: コスト最優先（全ジョブ max_shift = T/4）
     Solution* createCostExtremeSolution();
 
+    // ----------------------------------------------------------------
+    //  createPriorityRuleSolution (A1: priority-rule シード)
+    //   RCPSP の優先規則で活動リストを生成する list-scheduling。
+    //   eligible 集合（先行が全て確定したジョブ）から優先度最良を選ぶ。
+    //   同点は乱数でタイブレークするため、同じ rule でも多様な順列を生成できる。
+    //     rule = 0 : LFT  (Latest Finish Time 昇順, CPM ベース。makespan に最有効)
+    //     rule = 1 : MTS  (Most Total Successors 降順, 推移的後続数)
+    //     rule = 2 : GRPW (Greatest Rank Positional Weight 降順, d_j + Σ d_succ)
+    //   max_shift は全ジョブ 0（EST 配置）。呼び出し側で必要なら付与する。
+    // ----------------------------------------------------------------
+    Solution* createPriorityRuleSolution(int rule);
+
     // 変異オペレータが σ 計算・クリップに使用するホライゾン T を返す
     int getHorizon() const;
 
@@ -70,6 +82,9 @@ public:
     // strategy を変更し、変数上限 (vars[n..2n-1]) も同時に更新する。
     void setStrategy(int s) override;
 
+    // ログ用エンコーディング名
+    std::string encodingName() const override { return "MaxShift"; }
+
     // ----------------------------------------------------------------
     //  verifySchedule
     //   evaluate() が生成したスケジュールの先行制約・資源制約を検証する。
@@ -78,6 +93,9 @@ public:
     //   デバッグ・単体テスト用。本番評価では呼ばれない。
     // ----------------------------------------------------------------
     bool verifySchedule(Solution *solution) const;
+
+    // （旧 B5: FBI (Forward-Backward Improvement) は 2 目的問題でコストを破壊し
+    //   A1 に劣位だったため 2026-07-22 に削除。詳細は .miss_memory/018, 019 参照）
 };
 
 #endif // RCPSP_PROBLEM_MAXSHIFT_H
