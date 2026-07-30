@@ -11,7 +11,8 @@ cmake-build-release/
 hs_err_pid*.log
 
 # Claude Code メモリ
-.claude/
+.claude/*
+!.claude/settings.json
 
 # 実行結果ファイル
 FUN_*.txt

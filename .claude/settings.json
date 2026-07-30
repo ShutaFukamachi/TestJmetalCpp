@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-5",
+  "tui": "fullscreen",
+  "autoScrollEnabled": true,
+  "wheelScrollAccelerationEnabled": true
+}
