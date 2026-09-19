@@ -39,8 +39,10 @@ from collections import defaultdict
 # ------------------------------------------------------------------ #
 
 ENC_STYLES = {
-    'SchedObj': dict(color='#1f77b4', marker='o', label='SchedObj (0/1 リスト)'),
-    'MaxShift': dict(color='#d62728', marker='^', label='MaxShift リスト'),
+    'SchedObj':    dict(color='#1f77b4', marker='o', label='SchedObj (0/1 リスト)'),
+    'MaxShift':    dict(color='#d62728', marker='^', label='MaxShift リスト'),
+    'MaxShift_NF': dict(color='#ff7f0e', marker='*', s=80,
+                        label='MaxShift + Novelty Filter (試験)'),
 }
 
 CONDITIONS = [
@@ -49,6 +51,10 @@ CONDITIONS = [
     'RR050_RV0', 'RR050_RV1',
     'RR075_RV0', 'RR075_RV1',
 ]
+
+# RR=0.75 は MIP・NSGA とも実務的に破綻する限界条件のため、既定の一括実行からは除外する。
+# --cond で明示指定すれば従来どおり個別に描画できる。
+DEFAULT_CONDITIONS = [c for c in CONDITIONS if not c.startswith('RR075')]
 
 COND_LABELS = {
     'RR000_RV0': 'RR=0.00 RV=off',
@@ -96,7 +102,7 @@ def discover_files(search_dir, prefix):
         rest = bn[len("FUN_ENC_"):]
         # enc は末尾トークン (SchedObj / MaxShift)
         # cond は RR\d+_RV\d
-        m = re.search(r'(RR\d+_RV\d)_(SchedObj|MaxShift)$', rest)
+        m = re.search(r'(RR\d+_RV\d)_(SchedObj|MaxShift(?:_NF)?)$', rest)
         if not m:
             continue
         cond = m.group(1)
@@ -140,7 +146,7 @@ def plot_condition(cond, data, prefix, out_dir):
         ys = [s[1] for s in sols]
         ax.scatter(xs, ys,
                    c=style['color'], marker=style['marker'],
-                   s=50, alpha=0.75, label=style['label'], zorder=3)
+                   s=style.get('s', 50), alpha=0.75, label=style['label'], zorder=3)
 
     ax.set_xlabel('Makespan', fontsize=11)
     ax.set_ylabel('Total Resource Cost', fontsize=11)
@@ -237,10 +243,30 @@ def plot_summary(all_data, prefix, out_dir):
     print(f"  [saved] {out_path}")
 
     # ---- コンソールにテキストサマリを表示 ----
+    # NF (Novelty Filter) の統計を追加で収集
+    ms_nf_enc  = []
+    cost_nf_enc = []
+    delta_ms_nf   = []   # MaxShift_NF - MaxShift
+    delta_cost_nf = []
+    pareto_nf = []
+    for cond in conds:
+        d = all_data[cond]
+        mn_ms_mse, mn_c_mse = stats(d.get('MaxShift', []))
+        mn_ms_nf,  mn_c_nf  = stats(d.get('MaxShift_NF', []))
+        ms_nf_enc.append(mn_ms_nf)
+        cost_nf_enc.append(mn_c_nf)
+        delta_ms_nf.append(mn_ms_nf - mn_ms_mse
+                           if not (math.isnan(mn_ms_nf) or math.isnan(mn_ms_mse))
+                           else float('nan'))
+        delta_cost_nf.append(mn_c_nf - mn_c_mse
+                             if not (math.isnan(mn_c_nf) or math.isnan(mn_c_mse))
+                             else float('nan'))
+        pareto_nf.append(len(d.get('MaxShift_NF', [])))
+
     print(f"\n{'Condition':<16} {'MS(SO)':>8} {'MS(MS)':>8} {'ΔMS':>8}"
           f"  {'Cost(SO)':>10} {'Cost(MS)':>10} {'ΔCost':>10}"
-          f"  {'Pareto(SO)':>10} {'Pareto(MS)':>10}")
-    print('-' * 100)
+          f"  {'MS(NF)':>8} {'ΔMS(NF)':>8}  {'Cost(NF)':>10} {'ΔCost(NF)':>10}")
+    print('-' * 120)
     for i, cond in enumerate(conds):
         ms_s = f'{ms_so[i]:.0f}'      if not math.isnan(ms_so[i])      else 'N/A'
         ms_m = f'{ms_ms_enc[i]:.0f}'  if not math.isnan(ms_ms_enc[i])  else 'N/A'
@@ -248,11 +274,16 @@ def plot_summary(all_data, prefix, out_dir):
         cs_s = f'{cost_so[i]:.0f}'    if not math.isnan(cost_so[i])    else 'N/A'
         cs_m = f'{cost_ms_enc[i]:.0f}'if not math.isnan(cost_ms_enc[i])else 'N/A'
         dc   = (f'{delta_cost[i]:+.0f}'if not math.isnan(delta_cost[i]) else 'N/A')
+        ms_n  = f'{ms_nf_enc[i]:.0f}'    if not math.isnan(ms_nf_enc[i])    else '---'
+        dms_n = (f'{delta_ms_nf[i]:+.0f}'if not math.isnan(delta_ms_nf[i]) else '---')
+        cs_n  = f'{cost_nf_enc[i]:.0f}'  if not math.isnan(cost_nf_enc[i])  else '---'
+        dc_n  = (f'{delta_cost_nf[i]:+.0f}'if not math.isnan(delta_cost_nf[i])else '---')
         print(f'{cond:<16} {ms_s:>8} {ms_m:>8} {dms:>8}'
               f'  {cs_s:>10} {cs_m:>10} {dc:>10}'
-              f'  {pareto_so[i]:>10} {pareto_ms[i]:>10}')
-    print('-' * 100)
-    print('  SO = SchedObj  MS = MaxShift  Δ = MaxShift - SchedObj')
+              f'  {ms_n:>8} {dms_n:>8}  {cs_n:>10} {dc_n:>10}')
+    print('-' * 120)
+    print('  SO = SchedObj  MS = MaxShift  NF = MaxShift+NoveltyFilter')
+    print('  Δ(MS) = MaxShift - SchedObj   Δ(NF) = NF - MaxShift  (負 = 左より優秀)')
 
 
 # ------------------------------------------------------------------ #
@@ -325,10 +356,12 @@ def main():
     parser.add_argument('--prefix', default='',
                         help='インスタンスのプレフィックス (例: j301_1)。'
                              '省略時は全ファイルを自動検出。')
-    parser.add_argument('--dir', default='.',
-                        help='FUN_ENC_* ファイルがある作業ディレクトリ (default: .)')
+    parser.add_argument('--dir', default='results/FUN_ENC',
+                        help='FUN_ENC_* ファイルがある作業ディレクトリ (default: results/FUN_ENC)')
     parser.add_argument('--out', default='figures/encoding_cmp',
                         help='出力ディレクトリ (default: figures/encoding_cmp)')
+    parser.add_argument('--cond', default=None,
+                        help='条件タグ (例: RR075_RV0)。省略時は既定条件（RR<=0.50）のみ対象')
     args = parser.parse_args()
 
     search_dir = args.dir
@@ -344,6 +377,14 @@ def main():
     if not file_map:
         print("[ERROR] FUN_ENC_* ファイルが見つかりません。")
         print("  NSGAEncCpp を先に実行してください。")
+        sys.exit(1)
+
+    if args.cond:
+        file_map = {k: v for k, v in file_map.items() if k[0] == args.cond}
+    else:
+        file_map = {k: v for k, v in file_map.items() if k[0] in DEFAULT_CONDITIONS}
+    if not file_map:
+        print(f"[ERROR] 条件フィルタ後にファイルが残りません（--cond={args.cond}）。")
         sys.exit(1)
 
     # prefix ごと・条件ごとにデータを整理

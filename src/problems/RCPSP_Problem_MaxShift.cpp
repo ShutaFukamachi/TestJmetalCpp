@@ -158,56 +158,180 @@ void RCPSP_Problem_MaxShift::evaluate(Solution *solution) {
 
     double totalCost = 0.0;
 
+    // ============================================================
+    //  Parallel SGS（本命A: 生成スキーム変更）
+    //   時刻 t を決定点（＝配置済みジョブの完了時刻）に沿って進め、
+    //   各 t で eligible（全先行が完了）なジョブを活動リスト位置＝優先度
+    //   の昇順に配置する。コストは窓 [t, t+maxShift_j] 内の最安スロットで保持。
+    //   置けない（資源待ち）ジョブは次の決定点に持ち越す＝non-delay schedule。
+    //   Serial（下の else）は活動リスト順にジョブ単位で EST 配置＝active schedule。
+    // ============================================================
+    if (parallelSGS_) {
+        // 活動リスト位置＝優先度（小さいほど高優先）
+        std::vector<int> prio(n, 0);
+        for (int i = 0; i < n; ++i) prio[seq[i]] = i;
+
+        std::vector<char> placed(n, false);
+        int remaining = n;
+
+        int t = 0;
+        int guard = 0;
+        const int guardMax = 4 * (n + T) + 16;   // 無限ループ保険
+
+        while (remaining > 0 && t < T && guard++ < guardMax) {
+            // ---- eligible 集合: 未配置 && 全先行が配置済みかつ finish<=t ----
+            std::vector<int> elig;
+            for (int j = 0; j < n; ++j) {
+                if (placed[j]) continue;
+                bool ready = true;
+                int est = 0;
+                for (int p : preds[j]) {
+                    if (!placed[p]) { ready = false; break; }
+                    est = std::max(est, finish[p]);
+                }
+                if (!ready || est > t) continue;   // 先行未完 or まだ開始不可
+                elig.push_back(j);
+            }
+            // 優先度（活動リスト位置）昇順で処理
+            std::sort(elig.begin(), elig.end(),
+                      [&](int a, int b) { return prio[a] < prio[b]; });
+
+            for (int j : elig) {
+                int d = instance.duration[j];
+                if (d <= 0) {
+                    // ダミー: 先行完了時刻に配置（makespan には無影響）
+                    int est = 0;
+                    for (int p : preds[j]) est = std::max(est, finish[p]);
+                    startArr[j] = est; finish[j] = est;
+                    placed[j] = true; --remaining;
+                    continue;
+                }
+                // コスト窓 [t, t+maxShift[j]] 内の最安の実行可能スロット
+                int latest = std::min(T - d, t + maxShift[j]);
+                int    placedAt = -1;
+                double bestCost = 0.0;
+                for (int tt = t; tt <= latest; ++tt) {
+                    if (!canPlace(j, tt)) continue;
+                    double c = computeJobCostAt(j, tt, T);
+                    if (placedAt < 0 || c < bestCost - 1e-9) {
+                        bestCost = c; placedAt = tt;
+                    }
+                }
+                if (placedAt >= 0) {
+                    doPlace(j, placedAt);
+                    totalCost += bestCost;
+                    placed[j] = true; --remaining;
+                }
+                // 窓内で置けない → この決定点では見送り（次の決定点で再考）
+            }
+
+            // ---- 次の決定点へ: t より後の最小 finish（無ければ t+1）----
+            int nt = INT_MAX;
+            for (int j = 0; j < n; ++j)
+                if (placed[j] && finish[j] > t) nt = std::min(nt, finish[j]);
+            t = (nt == INT_MAX) ? t + 1 : nt;
+        }
+
+        if (remaining > 0) {   // 全ジョブ配置できず（実行不能）
+            solution->setObjective(0, 1e9);
+            solution->setObjective(1, 1e9);
+            return;
+        }
+    } else {
+
     for (int pos = 0; pos < n; ++pos) {
         int j = seq[pos];
         int d = instance.duration[j];
 
-        if (d <= 0) {
-            startArr[j] = 0;
-            finish[j]   = 0;
-            continue;
-        }
-
         // EST = 先行ジョブの最大完了時刻
         int est = 0;
         for (int p : preds[j]) est = std::max(est, finish[p]);
+
+        if (d <= 0) {
+            startArr[j] = est;
+            finish[j]   = est;
+            continue;
+        }
 
         // s_j^mak: EST 以降で最初に連続配置可能な時刻
         int t_mak = est;
         while (t_mak < T && !canPlace(j, t_mak)) ++t_mak;
 
         if (t_mak >= T) {
-            // ホライゾン末尾から後退探索（フォールバック）
-            t_mak = std::max(0, T - d);
-            while (t_mak >= 0 && !canPlace(j, t_mak)) --t_mak;
-            if (t_mak < 0) {
+            // [est, T-d] 内に置けない → est を下回る配置は先行制約違反になるため、
+            // 後退探索も est までに限定する（.miss_memory/022, 029 参照）。
+            // 見つからなければそのスケジュールは実行不能として扱う。
+            t_mak = T - d;
+            while (t_mak >= est && !canPlace(j, t_mak)) --t_mak;
+            if (t_mak < est) {
+                // startTimes_/execSlots_ を必ず n 要素に確定させてから返す。
+                // 未設定（前世代からの古いサイズ・空のまま）だと、この Solution を
+                // 後段が「評価済み」として読む際に不整合を招きうるため、
+                // 現時点までの部分的な配置結果で確実に上書きする（.miss_memory/029）。
+                solution->startTimes_ = startArr;
+                solution->execSlots_.assign(n, {});
                 solution->setObjective(0, 1e9);
                 solution->setObjective(1, 1e9);
                 return;
             }
         }
 
+        // B8: 実行区間 [t, t+d) の残容量合計（大きいほど後続の自由度が高い）
+        //   ※ usage は j 配置前の状態。全資源・全実行スロットの残りを合算する。
+        auto residualScore = [&](int t) -> long long {
+            long long s = 0;
+            for (int tau = t; tau < t + d; ++tau)
+                for (int k = 0; k < nRes; ++k)
+                    s += (long long)(capacityAtTime(k, tau)
+                                     - usage[k][tau] - instance.demand[j][k]);
+            return s;
+        };
+
         // max_shift[j] == 0: 純粋最早配置（コスト探索スキップ）
-        // max_shift[j] >  0: [t_mak, t_mak + maxShift[j]] でコスト最小・左詰め配置
+        // max_shift[j] >  0: [t_mak, t_mak + maxShift[j]] でコスト最小配置
+        //   同コストの tie-break: 既定は「最早（左詰め）」。
+        //   residualTieBreak_ ON のときは「残容量最大（B8: 資源平準化）」。
         int    placedAt = t_mak;
         double bestCost = computeJobCostAt(j, t_mak, T);
+        long long bestResidual = residualTieBreak_ ? residualScore(t_mak) : 0;
 
         if (maxShift[j] > 0) {
             int latest = std::min(T - d, t_mak + maxShift[j]);
             for (int t = t_mak + 1; t <= latest; ++t) {
-                if (canPlace(j, t)) {
-                    double c = computeJobCostAt(j, t, T);
-                    if (c < bestCost) {     // strict '<' → 左詰め保証
-                        bestCost = c;
-                        placedAt = t;
-                    }
+                if (!canPlace(j, t)) continue;
+                double c = computeJobCostAt(j, t, T);
+                if (c < bestCost - 1e-9) {          // より安い → 無条件採用
+                    bestCost = c;
+                    placedAt = t;
+                    if (residualTieBreak_) bestResidual = residualScore(t);
+                } else if (residualTieBreak_ && c < bestCost + 1e-9) {
+                    // 同コスト → 残容量が大きい方を採用（後続の自由度を残す）
+                    long long r = residualScore(t);
+                    if (r > bestResidual) { placedAt = t; bestResidual = r; }
                 }
+                // residualTieBreak_ OFF かつ同コストは何もしない＝現行の最早維持
             }
         }
 
         doPlace(j, placedAt);
         totalCost += bestCost;
     }
+    }  // end else (Serial SGS)
+
+#ifndef NDEBUG
+    // ---- デバッグビルド限定: 先行制約の自己検証（.miss_memory/029 再発防止）----
+    for (int a = 0; a < n; ++a) {
+        if (instance.duration[a] <= 0) continue;
+        for (int s : instance.successors[a]) {
+            if (s < 0 || s >= n || instance.duration[s] <= 0) continue;
+            if (finish[a] > startArr[s]) {
+                std::cerr << "[RCPSP_Problem_MaxShift::evaluate][ASSERT] precedence violation: "
+                          << "job=" << a << " finish=" << finish[a]
+                          << " > job=" << s << " start=" << startArr[s] << "\n";
+            }
+        }
+    }
+#endif
 
     // ---- 6. makespan ----
     int makespan = 0;

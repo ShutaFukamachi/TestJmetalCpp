@@ -81,7 +81,7 @@ void * MaxShiftMutation::execute(void * object) {
     //   ダミー端点は変異しない
     //   確率 probability で変異発生 → さらに:
     //     zeroResetProb (70%) : max_shift を 0 にリセット
-    //     残り (30%)          : Uniform[0, T/4] から再サンプリング
+    //     残り (30%)          : Uniform[0, halfT] から再サンプリング
     //   ※ zeroResetProb の実際の値は MaxShiftMutation.h の
     //     メンバ変数初期値 (= 0.70) が適用される。
     // ========================================================

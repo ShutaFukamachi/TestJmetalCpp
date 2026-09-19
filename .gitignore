@@ -28,3 +28,9 @@ figures/
 # バックアップファイル
 *控え*
 卒論*/
+
+# ログ・キャッシュ
+.mip_logs/
+.run48_logs/
+__pycache__/
+build_out.txt

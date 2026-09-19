@@ -43,6 +43,7 @@
 #include <future>
 #include <mutex>
 #include <functional>
+#include <random>
 
 #include "core/Problem.h"
 #include "core/Algorithm.h"
@@ -53,6 +54,7 @@
 #include "problems/RCPSP_Problem_MaxShift.h"
 #include "problems/RCPSP_Problem_Splitting.h"
 #include "problems/RCPSP_Problem_Splitting_MaxShift.h"
+#include "problems/RCPSP_Conditions.h"
 #include "operators/crossover/PermutationCrossover.h"
 #include "operators/crossover/MaxShiftCrossover.h"
 #include "operators/mutation/PermutationMutation.h"
@@ -105,6 +107,62 @@ void copyFileBinary(const string &src, const string &dst) {
     ofstream out(dst.c_str(), ios::binary);
     if (!out) throw runtime_error("Cannot open: " + dst);
     out << in.rdbuf();
+}
+
+// ============================================================
+//  Phase2: A2（単目的makespan GA）が抽出した順列プールを読み込む
+//    results/FUN_A2/<prefix>/PERM_A2_<prefix>_<ctag>.txt
+//    各行: ms cost perm[0] perm[1] ... perm[n-1]
+// ============================================================
+vector<vector<int>> loadA2Perms(const string &prefix, const string &ctag, int count) {
+    vector<vector<int>> perms;
+    const string path = "results/FUN_A2/" + prefix + "/PERM_A2_" + prefix + "_" + ctag + ".txt";
+    ifstream f(path.c_str());
+    if (!f) {
+        syncPrint("  [A2seed] WARNING: perm pool not found: " + path + "\n");
+        return perms;
+    }
+    string line;
+    while ((int)perms.size() < count && getline(f, line)) {
+        if (line.empty()) continue;
+        istringstream iss(line);
+        double ms, cost;
+        if (!(iss >> ms >> cost)) continue;
+        vector<int> perm;
+        int v;
+        while (iss >> v) perm.push_back(v);
+        if (!perm.empty()) perms.push_back(perm);
+    }
+    return perms;
+}
+
+// A2順列から max_shift に多様性を持たせた SolutionSet を構築する
+// （半分は0=EST端、半分はUniform[0,getEffectiveHalfT()]=コスト探索側）。
+SolutionSet* buildA2SeedSet(RCPSP_Problem_MaxShift *prob,
+                             const vector<vector<int>> &perms,
+                             std::mt19937 &rng)
+{
+    if (perms.empty()) return nullptr;
+    const int n = prob->getNumJobs();
+    const int halfT = prob->getEffectiveHalfT();
+    std::uniform_int_distribution<int> keyDist(0, std::max(0, halfT));
+
+    SolutionSet *seedSet = new SolutionSet((int)perms.size());
+    for (size_t i = 0; i < perms.size(); ++i) {
+        if ((int)perms[i].size() != n) continue;
+        Solution *sol = new Solution(prob);
+        auto &vars = sol->getVars();
+        for (int j = 0; j < n; ++j) vars[j] = perms[i][j];
+        for (int j = 0; j < n; ++j) {
+            int idx = n + j;
+            if (idx >= (int)vars.size()) break;
+            vars[idx] = (i % 2 == 0) ? 0 : keyDist(rng);
+        }
+        if (n > 0) vars[n + 0] = 0;
+        if (n > 1) vars[n + n - 1] = 0;
+        seedSet->add(sol);
+    }
+    return seedSet;
 }
 
 // SchedObj エンコーディング用オペレータをアタッチ
@@ -215,7 +273,11 @@ SolutionSet* runStrategies(ProbFactory makeProb,
                             int numStr,
                             int populationSize,
                             int evalsPerStrategy,
-                            const string &encTag)
+                            const string &encTag,
+                            bool a1PrioritySeed = false,
+                            int a2SeedCount = 0,
+                            const string &prefix = "",
+                            const string &ctag = "")
 {
     // ---- 各ストラテジーを std::async で並列実行 ----
     // prob は Solution::type_ が参照するため、finalPareto 生成後まで生かす
@@ -223,9 +285,16 @@ SolutionSet* runStrategies(ProbFactory makeProb,
     std::vector<std::future<StratResult>> futures;
     futures.reserve(numStr);
 
+    // Phase2: A2順列プールは条件ごとに共通（strategyに依存しない）ので1回だけ読む。
+    // SchedObj呼び出し（prob_ms==nullptr）では後段で無視される。
+    vector<vector<int>> a2Perms;
+    if (a2SeedCount > 0) {
+        a2Perms = loadA2Perms(prefix, ctag, a2SeedCount);
+    }
+
     for (int s = 1; s <= numStr; ++s) {
         futures.push_back(std::async(std::launch::async,
-            [makeProb, s, numStr, populationSize, evalsPerStrategy, encTag]()
+            [makeProb, s, numStr, populationSize, evalsPerStrategy, encTag, a1PrioritySeed, a2Perms]()
             -> StratResult
         {
             auto [prob, prob_ms] = makeProb(s);
@@ -239,9 +308,18 @@ SolutionSet* runStrategies(ProbFactory makeProb,
             int popSz  = populationSize;
             int maxEv  = evalsPerStrategy;
             int lsFlag = 0;
+            int a1Flag = a1PrioritySeed ? 1 : 0;
             algo->setInputParameter("populationSize", &popSz);
             algo->setInputParameter("maxEvaluations", &maxEv);
             algo->setInputParameter("useLocalSearch",  &lsFlag);
+            algo->setInputParameter("a1PrioritySeed",  &a1Flag);
+
+            SolutionSet *a2SeedSet = nullptr;
+            if (prob_ms && !a2Perms.empty()) {
+                std::mt19937 seedRng((unsigned)(std::hash<string>{}(encTag) + s * 7919u));
+                a2SeedSet = buildA2SeedSet(prob_ms, a2Perms, seedRng);
+                if (a2SeedSet) algo->setInputParameter("initialPopulation", a2SeedSet);
+            }
 
             if (prob_ms)
                 attachMaxShiftOps(algo, prob_ms);
@@ -249,6 +327,7 @@ SolutionSet* runStrategies(ProbFactory makeProb,
                 attachSchedObjOps(algo, prob);
 
             SolutionSet *pop = algo->execute();
+            delete a2SeedSet;
 
             SolutionSet *result = new SolutionSet(populationSize * 4);
             {
@@ -407,13 +486,10 @@ void EncodingComparisonRunner_P1::runAll() const {
     const string costsFile = "costs_" + prefix_ + ".csv";
     if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs.csv");
 
-    struct Cond { double rr; bool rv; };
-    const vector<Cond> conditions = {
-        {0.00, false}, {0.00, true},
-        {0.25, false}, {0.25, true},
-        {0.50, false}, {0.50, true},
-        {0.75, false}, {0.75, true},
-    };
+    using Cond = RCPSP_Cond;
+    // 比較対象は RR<=0.50（6条件）。RR=0.75 は限界条件用に RCPSP_Conditions.h で別枠管理
+    // （再有効化する場合は RCPSP_ALL_CONDITIONS() に差し替える）。
+    const vector<Cond> conditions = RCPSP_STANDARD_CONDITIONS();
     const vector<pair<int,string>> encodings = {{0,"SchedObj"},{1,"MaxShift"}};
 
     cout << "\n============================================================\n";
@@ -500,6 +576,15 @@ public:
         int    evalsPerStrategy      = 50000;
         int    numStrategiesSchedObj = 4;
         int    numStrategiesMaxShift = 4;
+        // true のとき P2/P3 をスキップし P1 のみ実行する（既定 false = 従来どおり P1/P2/P3 全実行）。
+        // MIP・厳密解と比較する用途では P2/P3 は不要なため、実行時間を約1/3に短縮できる。
+        bool   p1Only                 = false;
+        // A1 priority-rule シード（LFT/MTS/GRPW）の ON/OFF（既定 false=OFF、A/B比較用）。
+        // MaxShift系（RCPSP_Problem_MaxShift派生）にのみ効く。SchedObjでは無効（no-op）。
+        bool   a1PrioritySeed         = false;
+        // Phase2: A2（単目的makespan GA）が抽出した順列プールの注入数（既定0=OFF）。
+        // results/FUN_A2/<prefix>/PERM_A2_*.txt を読む。MaxShiftのみに効く（SchedObj無効）。
+        int    a2SeedCount            = 0;
     };
 
     explicit EncodingComparisonRunner_All(Config cfg)
@@ -575,7 +660,8 @@ SolutionSet* EncodingComparisonRunner_All::runEncoding(
     SolutionSet *pareto = EncUtil::runStrategies(
             factory, numStr,
             cfg_.populationSize, cfg_.evalsPerStrategy,
-            splitMode + "_" + encTag);
+            splitMode + "_" + encTag,
+            cfg_.a1PrioritySeed, cfg_.a2SeedCount, prefix_, ctag);
     return pareto;
 }
 
@@ -583,18 +669,18 @@ void EncodingComparisonRunner_All::runAll() const {
     const string costsFile = "costs_" + prefix_ + ".csv";
     if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs.csv");
 
-    struct Cond { double rr; bool rv; };
-    const vector<Cond> conditions = {
-        {0.00, false}, {0.00, true},
-        {0.25, false}, {0.25, true},
-        {0.50, false}, {0.50, true},
-        {0.75, false}, {0.75, true},
-    };
-    const vector<string>       splitModes = {"P1", "P2", "P3"};
+    using Cond = RCPSP_Cond;
+    // 比較対象は RR<=0.50（6条件）。RR=0.75 は限界条件用に RCPSP_Conditions.h で別枠管理
+    // （再有効化する場合は RCPSP_ALL_CONDITIONS() に差し替える）。
+    const vector<Cond> conditions = RCPSP_STANDARD_CONDITIONS();
+    const vector<string> splitModes = cfg_.p1Only
+        ? vector<string>{"P1"}
+        : vector<string>{"P1", "P2", "P3"};
     const vector<pair<int,string>> encodings = {{0,"SchedObj"},{1,"MaxShift"}};
 
     cout << "\n============================================================\n";
-    cout << " All Encoding Comparison Run (P1/P2/P3 x SchedObj/MaxShift)\n";
+    cout << " All Encoding Comparison Run ("
+         << (cfg_.p1Only ? "P1 only" : "P1/P2/P3") << " x SchedObj/MaxShift)\n";
     cout << " Instance: " << cfg_.instanceFile << "\n";
     cout << " popSize=" << cfg_.populationSize
          << "  evalsPerStrategy=" << cfg_.evalsPerStrategy << "\n";
@@ -605,7 +691,7 @@ void EncodingComparisonRunner_All::runAll() const {
     for (const auto &m : splitModes)
         cout << right << setw(12) << (m+"_SO_ms")
              << setw(12) << (m+"_MS_ms");
-    cout << "\n" << string(14 + 12*6, '-') << "\n";
+    cout << "\n" << string(14 + 12*2*splitModes.size(), '-') << "\n";
 
     for (const auto &c : conditions) {
         RCPSP_Problem::resetGlobalCostSeries();
@@ -674,7 +760,7 @@ void EncodingComparisonRunner_All::runAll() const {
         cout << "\n";
     }
 
-    cout << string(14 + 12*6, '-') << "\n";
+    cout << string(14 + 12*2*splitModes.size(), '-') << "\n";
     cout << "[ALL DONE] " << prefix_ << "\n\n";
 }
 
@@ -684,7 +770,29 @@ void EncodingComparisonRunner_All::runAll() const {
 int main(int argc, char **argv) {
     try {
         const string defaultInstance = "j30.sm/j301_1.sm";
-        const string instanceFile = (argc >= 2) ? string(argv[1]) : defaultInstance;
+
+        // 引数走査: 最初の非オプション引数をインスタンスファイル、
+        // --p1-only を見つけたら P2/P3 をスキップするフラグとして扱う（既定オフ、従来どおり P1/P2/P3 全実行）。
+        string instanceFile;
+        bool   p1Only = false;
+        bool   a1     = false;
+        int    a2seed = 0;
+        int    evalsOverride = -1;
+        for (int i = 1; i < argc; ++i) {
+            string a = argv[i];
+            if (a == "--p1-only") {
+                p1Only = true;
+            } else if (a == "--a1") {
+                a1 = true;
+            } else if (a == "--a2seed" && i + 1 < argc) {
+                a2seed = stoi(argv[++i]);
+            } else if (a == "--evals" && i + 1 < argc) {
+                evalsOverride = stoi(argv[++i]);
+            } else if (instanceFile.empty()) {
+                instanceFile = a;
+            }
+        }
+        if (instanceFile.empty()) instanceFile = defaultInstance;
 
         // 共通設定
         EncodingComparisonRunner_All::Config cfg;
@@ -692,9 +800,12 @@ int main(int argc, char **argv) {
         cfg.rr                     = 0.0;
         cfg.rv                     = false;
         cfg.populationSize         = 100;
-        cfg.evalsPerStrategy       = 100000;
+        cfg.evalsPerStrategy       = (evalsOverride > 0) ? evalsOverride : 100000;
         cfg.numStrategiesSchedObj  = 4;  // S1..S4
         cfg.numStrategiesMaxShift  = 4;  // S1=upper=0, S2=T/8, S3=T/4, S4=T/2
+        cfg.p1Only                 = p1Only;
+        cfg.a1PrioritySeed         = a1;   // --a1 で A1 priority-rule シードON（既定OFF、A/B比較用）
+        cfg.a2SeedCount            = a2seed;  // --a2seed N でA2順列プールをN個注入（既定0=OFF）
 
         // ---- 感度分析（MaxShift 上限 T/4 の妥当性検証） ----
         {

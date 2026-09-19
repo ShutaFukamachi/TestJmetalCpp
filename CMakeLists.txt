@@ -67,6 +67,27 @@ add_executable(A3AB main_A3_AB.cpp
 add_executable(E17 main_E17_PlacementExact.cpp
 )
 
+add_executable(PSGS main_ParallelSGS_AB.cpp
+)
+
+add_executable(MIPVERIFY main_MIP_Verify.cpp
+)
+
+add_executable(MSVERIFY main_MaxShift_Verify.cpp
+)
+
+add_executable(A2Makespan main_A2_SingleObjMakespan.cpp
+)
+
+add_executable(D1DecodeTest main_D1_DecodeTest.cpp
+)
+
+add_executable(D2Repro main_D2_Reproducibility.cpp
+)
+
+add_executable(D4WindowRank main_D4_WindowRank.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
@@ -102,7 +123,63 @@ target_link_libraries(E17 PRIVATE
         $<$<CONFIG:Release>:gurobi_c++md2017>
 )
 
+target_link_libraries(PSGS PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(MIPVERIFY PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(MSVERIFY PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
 target_link_libraries(NSGAMaxShiftDurCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(A2Makespan PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(D1DecodeTest PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(D2Repro PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+target_link_libraries(D4WindowRank PRIVATE
         jmetalcpp
 
         gurobi130

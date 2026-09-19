@@ -59,7 +59,7 @@ RCPSP_Problem_Splitting::simulateP2(int j, int S_j, int T,
     double cost = 0.0;
 
     for (int t = S_j; t < T && (int)execSlots.size() < d; ++t) {
-        // γ チェック: U_kt < demand → RR/RV による不足 → P2 スキップ許容
+        // γ チェック: U_kt < demand → RR/RV による不足 → P2 スキップ許容1
         bool gammaOk = true;
         for (int k = 0; k < nRes; ++k) {
             if (capacityAtTime(k, t) < inst.demand[j][k]) {
@@ -275,14 +275,14 @@ void RCPSP_Problem_Splitting::evaluate(Solution *solution) {
         int j = seq[pos];
         int d = inst.duration[j];
 
-        if (d <= 0) {
-            start[j] = finish[j] = 0;
-            continue;
-        }
-
         // 先行制約による最早開始時刻 (EST)
         int est = 0;
         for (int p : preds[j]) est = std::max(est, finish[p]);
+
+        if (d <= 0) {
+            start[j] = finish[j] = est;
+            continue;
+        }
 
         // ================================================================
         //  P2 配置ロジック

@@ -235,7 +235,6 @@ def plot_resource_usage(nJobs, nRes, durations, demand,
 # ------------------------------------------------------------------ #
 
 def main():
-    search_dir = '.'
     output_dir = sys.argv[1] if len(sys.argv) > 1 else OUTPUT_DIR
 
     # 出力ディレクトリをクリアして再生成
@@ -245,8 +244,14 @@ def main():
     print(f'Output directory cleared: {output_dir}/')
 
     # BnB のファイルのみ取得（_tree_ を含むもの）
-    fun_files   = sorted(glob.glob(os.path.join(search_dir, 'FUN_tree_*')))
-    sched_files = sorted(glob.glob(os.path.join(search_dir, 'SCHED_tree_*')))
+    # 新ディレクトリ構造: results/FUN/{instance}/FUN_tree_* , results/SCHED/{instance}/SCHED_tree_*
+    fun_files   = sorted(glob.glob(os.path.join('results', 'FUN',   '**', 'FUN_tree_*'),   recursive=True))
+    sched_files = sorted(glob.glob(os.path.join('results', 'SCHED', '**', 'SCHED_tree_*'), recursive=True))
+    # フォールバック: カレントディレクトリにある場合
+    if not fun_files:
+        fun_files   = sorted(glob.glob('FUN_tree_*'))
+    if not sched_files:
+        sched_files = sorted(glob.glob('SCHED_tree_*'))
 
     if not fun_files and not sched_files:
         print('BnB の FUN_tree_* / SCHED_tree_* ファイルが見つかりません。')

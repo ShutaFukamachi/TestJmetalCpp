@@ -66,6 +66,32 @@ public:
         instance.capacity_t = cap_t;
     }
 
+    // ============================================================
+    // MIP P2/P3 変換用: instance を丸ごと差し替える（RCPSP_MIP_Solver 専用）。
+    //   numberOfJobs_ を新インスタンスに同期する。
+    //   capacity_t 等の派生状態は呼び出し元が newInstance に正しく設定しておくこと
+    //   （P3: 元のまま維持 / P2: 圧縮後の値に置換）。グローバルなコスト表は
+    //   別途 overrideGlobalCostTable() / restoreCanonicalCostTable() で扱う。
+    //   evaluate() や getVars() など NSGA-II 側の経路は使わないため、
+    //   numberOfVariables_ / lowerLimit_ / upperLimit_ は更新しない。
+    // ============================================================
+    void replaceInstanceForMIPTransform(const RCPSP_Instance &newInstance) {
+        instance = newInstance;
+        numberOfJobs_ = instance.nJobs;
+    }
+
+    // MIP P2 変換用: 圧縮時間軸のコスト表を一時的に差し替える（正本CSVファイルは
+    // 変更しない・メモリ上のグローバル状態のみ）。使用後は必ず
+    // restoreCanonicalCostTable() で正本状態に戻すこと（.miss_memory/025 参照:
+    // 正本の暗黙上書き・フォールバック生成は禁止のため、あくまで一時的な
+    // in-memory 差し替えに限定する）。
+    static void overrideGlobalCostTable(const std::vector<std::vector<double>> &table);
+    static void restoreCanonicalCostTable();
+
+    // 資源 k の時刻 t における単位コスト c_k(t) を返す（正本コスト表を参照）。
+    // P2 の圧縮軸コスト表構築（元時刻での値を引き継ぐ）に使う。
+    double resourceCostAt(int k, int t, int horizon) const;
+
     // BnB 用: ジョブ j を時刻 t に配置したときのコストを返す
     double computeJobCostAt(int j, int t, int horizon) const;
 
@@ -75,8 +101,12 @@ public:
     // 戦略切り替え・カウンタリセット（4戦略独立実行用）
     virtual void setStrategy(int s) { strategy_ = s; }
     int  getStrategy() const { return strategy_; }
+    const std::string& getInstancePrefix() const { return instancePrefix_; }
     void resetEvalCounter()      { evalCounter_ = 0; }
     void clearStartTimesCache()  {} // キャッシュ廃止済み（solution->startTimes_ で代替）
+
+    // ログ用エンコーディング名。派生クラスで override してタグ衝突を防ぐ。
+    virtual std::string encodingName() const { return "SchedObj"; }
 
     // 出力用再評価: maxShift を固定値に上書きする（-1 で通常のランダム動作に戻す）
     //   0     → ESS（全ジョブ最早時刻）
@@ -86,8 +116,9 @@ public:
 protected:
     RCPSP_Instance instance;
 
-    int  strategy_           = 4;
-    int  evalCounter_        = 0;
+    int         strategy_           = 4;
+    int         evalCounter_        = 0;
+    std::string instancePrefix_;   // ファイル名からベース名（拡張子なし）を抽出して保持
     int  maxEvaluations_     = 0;
     int  outputMaxShift_     = -1;   // -1: 通常ランダム, ≥0: 固定値
 

@@ -49,6 +49,11 @@ SolutionSet *NSGAII::execute() {
     // 1 を渡すと LFT/MTS/GRPW 優先規則順列を初期集団に注入する。
     // （旧 A3 ランダム選抜シードは A1 に劣位・不採用のため 2026-07-22 に削除）
     bool   a1PrioritySeed     = false;
+    // diagnosticLogs: logs/{generation,manytoone,innovation}/ への世代ごとの診断ログ出力の
+    // ON/OFF（デフォルト OFF=false）。OFF のときはログファイルを開かないため、
+    // 下流の集計計算（many-to-one の map 構築・innovation の支配判定など）も
+    // .is_open() ガードにより自動的にスキップされる（大規模一括実行での I/O・CPU 負荷対策）。
+    bool   diagnosticLogs     = false;
     {
         void *p = getInputParameter("eliteMakespanSlots");
         if (p) eliteMakespanSlots = *static_cast<int *>(p);
@@ -58,6 +63,8 @@ SolutionSet *NSGAII::execute() {
         if (p) noveltyFilter = (*static_cast<int *>(p) != 0);
         p = getInputParameter("a1PrioritySeed");
         if (p) a1PrioritySeed = (*static_cast<int *>(p) != 0);
+        p = getInputParameter("diagnosticLogs");
+        if (p) diagnosticLogs = (*static_cast<int *>(p) != 0);
     }
     static thread_local std::mt19937 rng_ms{std::random_device{}()};
     std::uniform_real_distribution<> d01_ms(0.0, 1.0);
@@ -174,7 +181,7 @@ SolutionSet *NSGAII::execute() {
     const bool msMode = (dynamic_cast<RCPSP_Problem_MaxShift*>(problem_) != nullptr);
     int genCount = 0;
     std::ofstream genLog;
-    if (msMode) {
+    if (diagnosticLogs && msMode) {
         {
             int stratId = dynamic_cast<RCPSP_Problem*>(problem_)->getStrategy();
             const std::string logDir = "logs/generation/";
@@ -204,7 +211,7 @@ SolutionSet *NSGAII::execute() {
         encTag = rcpsp->encodingName();
     }
     if (noveltyFilter) encTag += "_NF";
-    {
+    if (diagnosticLogs) {
         if (auto rcpsp = dynamic_cast<RCPSP_Problem*>(problem_)) {
             int stratId = rcpsp->getStrategy();
             const std::string &inst = rcpsp->getInstancePrefix();

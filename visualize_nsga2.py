@@ -298,7 +298,6 @@ def plot_resource_usage(nJobs, nRes, durations, demand,
 # ------------------------------------------------------------------ #
 
 def main():
-    search_dir = '.'
     output_dir = sys.argv[1] if len(sys.argv) > 1 else OUTPUT_DIR
 
     # 出力ディレクトリをクリアして再生成
@@ -308,8 +307,14 @@ def main():
     print(f'Output directory cleared: {output_dir}/')
 
     # NSGA-II のファイルのみ取得（_tree_ を含まないもの）
-    all_fun   = sorted(glob.glob(os.path.join(search_dir, 'FUN_*')))
-    all_sched = sorted(glob.glob(os.path.join(search_dir, 'SCHED_*')))
+    # 新ディレクトリ構造: results/FUN/{instance}/FUN_* , results/SCHED/{instance}/SCHED_*
+    all_fun   = sorted(glob.glob(os.path.join('results', 'FUN',   '**', 'FUN_*'),   recursive=True))
+    all_sched = sorted(glob.glob(os.path.join('results', 'SCHED', '**', 'SCHED_*'), recursive=True))
+    # フォールバック: カレントディレクトリにある場合
+    if not all_fun:
+        all_fun   = sorted(glob.glob('FUN_*'))
+    if not all_sched:
+        all_sched = sorted(glob.glob('SCHED_*'))
 
     fun_files   = [f for f in all_fun   if '_tree_' not in os.path.basename(f)]
     sched_files = [f for f in all_sched if '_tree_' not in os.path.basename(f)]

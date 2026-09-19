@@ -55,6 +55,10 @@ COND_ORDER = [
     "RR075_RV0", "RR075_RV1",
 ]
 
+# RR=0.75 は MIP・NSGA とも実務的に破綻する限界条件のため、既定の一括実行からは除外する。
+# --cond で明示指定すれば従来どおり個別に描画できる。
+DEFAULT_CONDITIONS = [c for c in COND_ORDER if not c.startswith("RR075")]
+
 MS_ORDER = [
     ("P2", "TW"), ("P2", "WD"), ("P2", "WR"),
     ("P3", "TW"), ("P3", "WD"), ("P3", "WR"),
@@ -126,8 +130,13 @@ def load_cmp_csv(path: str) -> pd.DataFrame:
 
 
 def find_csvs_auto() -> tuple:
-    pfs  = sorted(glob.glob("PF_*.csv"))
-    cmps = sorted(glob.glob("CMP_*.csv"))
+    # 新ディレクトリ構造: results/FUN/{instance}/ 以下を再帰検索、なければカレント
+    pfs  = sorted(glob.glob(os.path.join('results', 'FUN', '**', 'PF_*.csv'), recursive=True))
+    cmps = sorted(glob.glob(os.path.join('results', 'FUN', '**', 'CMP_*.csv'), recursive=True))
+    if not pfs:
+        pfs  = sorted(glob.glob("PF_*.csv"))
+    if not cmps:
+        cmps = sorted(glob.glob("CMP_*.csv"))
     if not pfs:
         raise FileNotFoundError("PF_*.csv が見つかりません。")
     if not cmps:
@@ -421,6 +430,8 @@ def main() -> None:
                         help="CMP_*.csv のパス（省略時は自動検索）")
     parser.add_argument("--out", default="figures/comparison",
                         help="出力先ディレクトリ（デフォルト: figures/comparison）")
+    parser.add_argument("--cond", default=None,
+                        help="条件タグ (例: RR075_RV0)。省略時は既定条件（RR<=0.50）のみ対象")
     args = parser.parse_args()
 
     # ---- ファイル特定 ----
@@ -438,6 +449,12 @@ def main() -> None:
     # ---- データ読み込み ----
     df_pf    = load_pf_csv(pf_path)
     df_stats = load_cmp_csv(cmp_path)
+
+    # ---- 条件フィルタ（既定は RR<=0.50、--cond 指定時はそれのみ）----
+    allowed_conds = {args.cond} if args.cond else set(DEFAULT_CONDITIONS)
+    df_pf    = df_pf[df_pf["condition"].isin(allowed_conds)]
+    if "condition" in df_stats.columns:
+        df_stats = df_stats[df_stats["condition"].isin(allowed_conds)]
 
     # 統計列を数値型に統一（'+3.0' のような文字列が含まれる場合の対策）
     for col in ["delta_ms_min", "delta_cost_min", "ratio_ms_min", "ratio_cost_min",

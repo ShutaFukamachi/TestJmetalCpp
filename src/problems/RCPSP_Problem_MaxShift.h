@@ -94,8 +94,37 @@ public:
     // ----------------------------------------------------------------
     bool verifySchedule(Solution *solution) const;
 
-    // （旧 B5: FBI (Forward-Backward Improvement) は 2 目的問題でコストを破壊し
-    //   A1 に劣位だったため 2026-07-22 に削除。詳細は .miss_memory/018, 019 参照）
+    // ----------------------------------------------------------------
+    //  B8: 同コスト tie-break を「最早」→「資源平準化（残容量最大）」に切替
+    //   evaluate() のコスト探索で、コストが同点の配置候補の中から、
+    //   実行区間 [t, t+d) の残容量合計が最大（＝後続ジョブの自由度が高い）
+    //   位置を選ぶ。コスト自体は変えないため 2 目的の cost を悪化させない。
+    //   makespan の床を下げられるかを A/B で検証する目的で toggle 化。
+    //   （旧 B5: FBI は 2 目的でコストを破壊し A1 に劣位のため 2026-07-22 に削除。
+    //     詳細は .miss_memory/018, 019 参照）
+    // ----------------------------------------------------------------
+    void setResidualTieBreak(bool b) { residualTieBreak_ = b; }
+    bool getResidualTieBreak() const { return residualTieBreak_; }
+
+    // ----------------------------------------------------------------
+    //  生成スキーム切替: Serial SGS（既定）⇄ Parallel SGS
+    //   ゼミ助言「配置でなく生成スキーム/解構造」を受けた本命A。
+    //   Serial SGS  : 活動リスト順にジョブを1つずつ EST 配置（現行）。
+    //                 → active schedule 集合を探索。
+    //   Parallel SGS: 時刻を進めながら、その時点で eligible なジョブを
+    //                 活動リスト位置（優先度）順に配置（時間駆動）。
+    //                 → non-delay schedule 集合を探索＝到達可能な
+    //                   スケジュール集合そのものが変わる（B8/E17 で
+    //                   「配置に伸びしろ無し」と判明したため生成スキームを変える）。
+    //   コスト目的は両者とも max_shift 窓 [t, t+maxShift_j] 内の最安スロット
+    //   探索で保持する。default OFF（＝Serial）で A/B できるよう toggle 化。
+    // ----------------------------------------------------------------
+    void setParallelSGS(bool b) { parallelSGS_ = b; }
+    bool getParallelSGS() const { return parallelSGS_; }
+
+private:
+    bool residualTieBreak_ = false;
+    bool parallelSGS_      = false;
 };
 
 #endif // RCPSP_PROBLEM_MAXSHIFT_H

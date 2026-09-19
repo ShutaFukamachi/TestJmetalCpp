@@ -400,14 +400,14 @@ void RCPSP_Problem_Setup::evaluate(Solution *solution)
         int j = seq[pos];
         int d = inst.duration[j];
 
-        if (d <= 0) {
-            start[j] = finish[j] = 0;
-            continue;
-        }
-
         // EST
         int est = 0;
         for (int p : preds[j]) est = std::max(est, finish[p]);
+
+        if (d <= 0) {
+            start[j] = finish[j] = est;
+            continue;
+        }
 
         // ============================================================
         //  P2 + セットアップ

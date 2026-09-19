@@ -601,7 +601,6 @@ def plot_hypervolume(fun_files, output_dir):
 # ------------------------------------------------------------------ #
 
 def main():
-    search_dir = '.'
     output_dir = sys.argv[1] if len(sys.argv) > 1 else OUTPUT_DIR
 
     # 出力ディレクトリをクリアして再生成
@@ -611,8 +610,14 @@ def main():
     print(f'Output directory: {output_dir}/')
 
     # FUN_* / SCHED_* ファイルを収集（P1/P2/P3 サフィックスを持つもの）
-    all_fun   = sorted(glob.glob(os.path.join(search_dir, 'FUN_*')))
-    all_sched = sorted(glob.glob(os.path.join(search_dir, 'SCHED_*')))
+    # 新ディレクトリ構造: results/FUN/{instance}/FUN_* , results/SCHED/{instance}/SCHED_*
+    all_fun   = sorted(glob.glob(os.path.join('results', 'FUN',   '**', 'FUN_*'),   recursive=True))
+    all_sched = sorted(glob.glob(os.path.join('results', 'SCHED', '**', 'SCHED_*'), recursive=True))
+    # フォールバック: カレントディレクトリにある場合
+    if not all_fun:
+        all_fun   = sorted(glob.glob('FUN_*'))
+    if not all_sched:
+        all_sched = sorted(glob.glob('SCHED_*'))
 
     fun_files   = [f for f in all_fun
                    if re.search(r'_(P[123])$', os.path.basename(f))]

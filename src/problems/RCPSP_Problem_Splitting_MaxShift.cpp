@@ -184,14 +184,14 @@ void RCPSP_Problem_Splitting_MaxShift::evaluate(Solution *solution) {
         int j = seq[pos];
         int d = instance.duration[j];
 
-        if (d <= 0) {
-            startArr[j] = finish[j] = 0;
-            continue;
-        }
-
         // EST: 先行ジョブの最大完了時刻
         int est = 0;
         for (int p : preds[j]) est = std::max(est, finish[p]);
+
+        if (d <= 0) {
+            startArr[j] = finish[j] = est;
+            continue;
+        }
 
         // ============================================================
         //  P2 配置ロジック

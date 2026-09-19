@@ -3,6 +3,7 @@
 #include "Solution.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <numeric>
 #include <random>
@@ -15,6 +16,7 @@
 #include <queue>
 #include <mutex>
 #include <atomic>
+#include <stdexcept>
 
 static thread_local std::mt19937 rng(std::random_device{}());
 
@@ -137,7 +139,7 @@ static bool COST_INITIALIZED = false;
 static int  COST_T           = -1;
 static int  COST_R           = 4;
 static std::vector<std::vector<double>> COST_TABLE;
-static std::string COST_CSV_PATH = "costs.csv";
+static std::string COST_CSV_PATH = "costs/costs.csv";
 
 static std::mutex         g_costMutex;
 static std::atomic<bool>  g_costInitialized{false};
@@ -213,49 +215,20 @@ static void resetCostSeriesInternal() {
 }
 
 static void generateCostSeries(int R, int T) {
+    (void)T;  // 正本ロードのみ。地平線引数は使用しない（乱数生成を廃止したため）
     std::lock_guard<std::mutex> lk(g_costMutex);
     if (g_costInitialized.load(std::memory_order_relaxed)) return;
 
+    // 正本コスト表 costs/costs_<prefix>.csv を唯一の真実として明示ロードする。
     if (loadCostTableFromCSV(COST_CSV_PATH, R)) return;
 
-    CostRNG crng;
-    if (T <= 0) T = 1;
-
-    COST_TABLE.assign(R, std::vector<double>(T, 0.0));
-
-    for (int k = 0; k < R; ++k) {
-        int pattern = (k % 4) + 1;
-        double alpha = crng.uniform(100.0, 200.0);
-        double beta = 0.0;
-        double threshold = (2.0 * T > 0.0) ? (alpha / (2.0 * T)) : 0.0;
-        bool positiveTrend = (pattern == 1 || pattern == 3);
-        if (positiveTrend) {
-            if (threshold > 0.1) beta = crng.uniform(0.1, threshold);
-            else                 beta = 0.1;
-        } else {
-            if (threshold > 0.1) beta = crng.uniform(-threshold, -0.1);
-            else                 beta = -0.1;
-        }
-        std::vector<double> gamma_seq;
-        if (pattern == 3 || pattern == 4) {
-            double Gamma = crng.uniform(20.0, 30.0);
-            gamma_seq = seasonal_sequence(Gamma);
-        } else {
-            gamma_seq = std::vector<double>(12, 0.0);
-        }
-        for (int t = 0; t < T; ++t) {
-            double gamma_t = gamma_seq[t % gamma_seq.size()];
-            double omega_t = crng.normal(0.0, 5.0);
-            double c = alpha + beta * t + gamma_t + omega_t;
-            if (c < 0.0) c = 0.0;
-            COST_TABLE[k][t] = c;
-        }
-    }
-
-    COST_R = R; COST_T = T; COST_INITIALIZED = true;
-    g_costInitialized.store(true, std::memory_order_release);
-    writeCostTableToCSV(COST_CSV_PATH);
-    std::cout << "[RCPSP_Problem] Generated random cost series (R=" << R << ", T=" << T << ")\n";
+    // 【重要】正本が無い場合に「黙ってランダム表を生成して正本パスへ上書き」する
+    // 旧フォールバックは禁止。系列ごとに別コスト表で計算され比較が無効化された
+    // 欠陥2の根本原因。乱数表を作らず・正本を上書きせず、明確なエラーで停止する。
+    std::cerr << "[RCPSP_Problem] FATAL: cost table not found: " << COST_CSV_PATH << "\n"
+              << "  正本 " << COST_CSV_PATH << " を用意してください。"
+                 "コスト表の自動ランダム生成は禁止です（欠陥2再発防止）。\n";
+    throw std::runtime_error("cost table not found (no random fallback): " + COST_CSV_PATH);
 }
 
 static double resourceCost(int k, int t, int horizon) {
@@ -334,6 +307,16 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
                               double rr, bool rv)
         : Problem(), strategy_(strategy), instance(readPSPLIB_SM(filename)) {
 
+    // ベース名（拡張子なし）を抽出して保持
+    {
+        std::string s = filename;
+        size_t p = s.find_last_of("/\\");
+        if (p != std::string::npos) s = s.substr(p + 1);
+        size_t dot = s.find_last_of('.');
+        if (dot != std::string::npos) s = s.substr(0, dot);
+        instancePrefix_ = s;
+    }
+
     std::cout << "[RCPSP_Problem] Loading instance from " << filename
               << "  RR=" << rr << "  RV=" << (rv ? 1 : 0) << std::endl;
 
@@ -364,7 +347,11 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
         if (p != std::string::npos) base = base.substr(p + 1);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) base = base.substr(0, dot);
-        std::string newCsvPath = "costs_" + base + ".csv";
+        // 正本コスト表はフラット costs/costs_<prefix>.csv に一本化する（読み取り専用）。
+        // （旧: costs/<prefix>/costs_<prefix>.csv のネストは、正本不在時のランダム
+        //   生成フォールバックが作った別表で、系列間のコスト不一致＝欠陥2の温床だった）
+        std::filesystem::create_directories("costs");
+        std::string newCsvPath = "costs/costs_" + base + ".csv";
         std::lock_guard<std::mutex> lk(g_costMutex);
         if (COST_CSV_PATH != newCsvPath) {
             // 別インスタンスに切り替わった → コストテーブルをリセット
@@ -429,6 +416,17 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv, uint32_t seed) 
 
     instance.capacity_t.assign(nRes, std::vector<int>(T, 0));
 
+    // ---- Step 7 前処理: vacDay を全資源共通で 1 回だけ決定 ----
+    // 資源ごとに独立に抽選すると異なる休暇日が重なり「実質的な休暇頻度」が
+    // 14日ごとから7日ごと（または更に短期間）になってしまう。
+    // 論文の意図は「プロジェクト全体で同一の週休日」であるため、
+    // vacDay は nRes 分のループに入る前に 1 回だけ決定する。
+    int vacDay = 0;
+    if (rv) {
+        std::uniform_real_distribution<> u01(0.0, 1.0);
+        vacDay = (u01(capRng) < 0.5) ? 0 : 7;
+    }
+
     for (int k = 0; k < nRes; ++k) {
         double U0 = static_cast<double>(instance.capacity[k]);
 
@@ -451,9 +449,6 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv, uint32_t seed) 
 
         // ---- Step 7: Resource Vacation ----
         if (rv) {
-            // rn を生成して vacDay を決定（論文 Step7 通り）
-            std::uniform_real_distribution<> u01(0.0, 1.0);
-            int vacDay = (u01(capRng) < 0.5) ? 0 : 7;
             for (int t = 0; t < T; ++t) {
                 if (t % 14 == vacDay) {
                     instance.capacity_t[k][t] = 0;  // 資源休暇
@@ -464,7 +459,9 @@ void RCPSP_Problem::buildTimeVaryingCapacity(double rr, bool rv, uint32_t seed) 
 
     std::cout << "[RCPSP_Problem] Built time-varying capacity"
               << " (nRes=" << nRes << ", T=" << T
-              << ", RR=" << rr << ", RV=" << (rv ? 1 : 0) << ")\n";
+              << ", RR=" << rr << ", RV=" << (rv ? 1 : 0)
+              << (rv ? (std::string(", vacDay=") + std::to_string(vacDay)) : "")
+              << ")\n";
 }
 
 void RCPSP_Problem::printInfo() const {
@@ -626,14 +623,14 @@ void RCPSP_Problem::evaluate(Solution *solution) {
         int j = seq[pos];
         int d = instance.duration[j];
 
-        if (d <= 0) {
-            start[j] = finish[j] = 0;
-            continue;
-        }
-
         int est = 0;
         for (int p : preds[j]) {
             est = std::max(est, finish[p]);
+        }
+
+        if (d <= 0) {
+            start[j] = finish[j] = est;
+            continue;
         }
 
         int t_mak = est;
@@ -641,11 +638,17 @@ void RCPSP_Problem::evaluate(Solution *solution) {
             ++t_mak;
         }
         if (t_mak >= T) {
-            t_mak = std::max(0, T - d);
-            while (t_mak >= 0 && !canPlace(j, t_mak)) {
+            // [est, T-d] 内に置けない → est を下回る配置は先行制約違反になるため、
+            // 後退探索も est までに限定する（.miss_memory/022, 029 参照）。
+            // 見つからなければそのスケジュールは実行不能として扱う。
+            t_mak = T - d;
+            while (t_mak >= est && !canPlace(j, t_mak)) {
                 --t_mak;
             }
-            if (t_mak < 0) {
+            if (t_mak < est) {
+                // startTimes_/execSlots_ を必ず n 要素に確定させてから返す（.miss_memory/029）。
+                solution->startTimes_ = start;
+                solution->execSlots_.assign(n, {});
                 solution->setObjective(0, 1e9);
                 solution->setObjective(1, 1e9);
                 return;
@@ -677,6 +680,21 @@ void RCPSP_Problem::evaluate(Solution *solution) {
     for (int j = 0; j < n; ++j) {
         if (finish[j] > makespan) makespan = finish[j];
     }
+
+#ifndef NDEBUG
+    // ---- デバッグビルド限定: 先行制約の自己検証（.miss_memory/029 再発防止）----
+    for (int a = 0; a < n; ++a) {
+        if (instance.duration[a] <= 0) continue;
+        for (int s : instance.successors[a]) {
+            if (s < 0 || s >= n || instance.duration[s] <= 0) continue;
+            if (finish[a] > start[s]) {
+                std::cerr << "[RCPSP_Problem::evaluate][ASSERT] precedence violation: "
+                          << "job=" << a << " finish=" << finish[a]
+                          << " > job=" << s << " start=" << start[s] << "\n";
+            }
+        }
+    }
+#endif
 
     if (!schedule_feasible(instance, start)) {
         std::cerr << "[ERROR] Infeasible schedule generated!" << std::endl;
@@ -982,14 +1000,15 @@ std::vector<int> RCPSP_Problem::computeStartTimes(Solution *solution) const {
     for (int pos = 0; pos < n; ++pos) {
         int j = seq[pos];
         int d = instance.duration[j];
-        if (d <= 0) { start[j] = finish[j] = 0; continue; }
 
         int est = 0;
         for (int p : preds[j]) est = std::max(est, finish[p]);
 
+        if (d <= 0) { start[j] = finish[j] = est; continue; }
+
         int t = est;
         while (t < T && !canPlace(j, t)) ++t;
-        if (t >= T) t = std::max(0, T - d);
+        if (t >= T) t = std::max(est, T - d);
 
         for (int tau = t; tau < t + d; ++tau)
             for (int k = 0; k < nRes; ++k)
@@ -1067,4 +1086,28 @@ void RCPSP_Problem::resetGlobalCostSeries() {
 
 bool RCPSP_Problem::writeGlobalCostSeriesCSV(const std::string &filename) {
     return writeCostTableToCSV(filename);
+}
+
+// ============================================================
+// MIP P2 変換用: 圧縮軸のコスト表を一時的にメモリ上でのみ差し替える。
+// 正本CSV（costs/costs_<prefix>.csv）は一切変更しない。
+// ============================================================
+void RCPSP_Problem::overrideGlobalCostTable(const std::vector<std::vector<double>> &table) {
+    std::lock_guard<std::mutex> lk(g_costMutex);
+    COST_TABLE       = table;
+    COST_R           = (int)table.size();
+    COST_T           = (COST_R > 0) ? (int)table[0].size() : 0;
+    COST_INITIALIZED = true;
+    g_costInitialized.store(true, std::memory_order_release);
+    std::cout << "[RCPSP_Problem] Overrode global cost table (compressed axis, R="
+              << COST_R << ", T=" << COST_T << ")\n";
+}
+
+void RCPSP_Problem::restoreCanonicalCostTable() {
+    // 次回アクセス時に正本CSV(COST_CSV_PATH)から再ロードされる状態に戻す。
+    resetCostSeriesInternal();
+}
+
+double RCPSP_Problem::resourceCostAt(int k, int t, int horizon) const {
+    return resourceCost(k, t, horizon);
 }

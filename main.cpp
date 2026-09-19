@@ -29,6 +29,7 @@
 // ============================================================
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -53,6 +54,7 @@
 #include "problems/RCPSP_Problem_MaxShift.h"
 #include "problems/RCPSP_Problem_Splitting.h"
 #include "problems/RCPSP_Problem_Splitting_MaxShift.h"
+#include "problems/RCPSP_Conditions.h"
 #include "operators/crossover/PermutationCrossover.h"
 #include "operators/crossover/MaxShiftCrossover.h"
 #include "operators/mutation/PermutationMutation.h"
@@ -60,16 +62,23 @@
 #include "operators/selection/BinaryTournament2.h"
 #include "util/Ranking.h"
 #include "problems/MaxShiftSensitivity.h"
+#include "localsearch/FrontLocalSearch.h"
 
 using namespace std;
 
 // ============================================================
 //  共通ユーティリティ（両ランナーで使用）
 // ============================================================
+namespace fs = std::filesystem;
+
 namespace EncUtil {
 
 // スレッドセーフなコンソール出力用ミューテックス
 static std::mutex g_printMutex;
+
+inline void ensureDir(const std::string &dir) {
+    fs::create_directories(dir);
+}
 
 inline void syncPrint(const std::string &msg) {
     std::lock_guard<std::mutex> lk(g_printMutex);
@@ -136,8 +145,10 @@ void writeResultFiles(const string &outPrefix,
                       SolutionSet  *pareto,
                       RCPSP_Problem *prob)
 {
-    const string funPath   = "FUN_ENC_"   + outPrefix + ".txt";
-    const string schedPath = "SCHED_ENC_" + outPrefix + ".txt";
+    const string dir = "results/FUN_ENC/" + prob->getInstancePrefix() + "/";
+    ensureDir(dir);
+    const string funPath   = dir + "FUN_ENC_"   + outPrefix + ".txt";
+    const string schedPath = dir + "SCHED_ENC_" + outPrefix + ".txt";
 
     ofstream funFile(funPath.c_str());
     ofstream schedFile(schedPath.c_str());
@@ -219,7 +230,8 @@ SolutionSet* runStrategies(ProbFactory makeProb,
                             int numStr,
                             int populationSize,
                             int evalsPerStrategy,
-                            const string &encTag)
+                            const string &encTag,
+                            bool noveltyFilter = false)   // ← NF フラグ（デフォルト off）
 {
     // ---- 各ストラテジーを std::async で並列実行 ----
     // prob は Solution::type_ が参照するため、finalPareto 生成後まで生かす
@@ -229,7 +241,7 @@ SolutionSet* runStrategies(ProbFactory makeProb,
 
     for (int s = 1; s <= numStr; ++s) {
         futures.push_back(std::async(std::launch::async,
-            [makeProb, s, numStr, populationSize, evalsPerStrategy, encTag]()
+            [makeProb, s, numStr, populationSize, evalsPerStrategy, encTag, noveltyFilter]()
             -> StratResult
         {
             auto [prob, prob_ms] = makeProb(s);
@@ -243,9 +255,11 @@ SolutionSet* runStrategies(ProbFactory makeProb,
             int popSz  = populationSize;
             int maxEv  = evalsPerStrategy;
             int lsFlag = 0;
+            int nfFlag = noveltyFilter ? 1 : 0;
             algo->setInputParameter("populationSize", &popSz);
             algo->setInputParameter("maxEvaluations", &maxEv);
             algo->setInputParameter("useLocalSearch",  &lsFlag);
+            algo->setInputParameter("noveltyFilter",   &nfFlag);
 
             if (prob_ms)
                 attachMaxShiftOps(algo, prob_ms);
@@ -264,6 +278,21 @@ SolutionSet* runStrategies(ProbFactory makeProb,
                               + std::to_string(f0->size()) + "\n");
                     for (int i = 0; i < f0->size(); ++i)
                         result->add(new Solution(f0->get(i)));
+
+                    // MaxShift: 進化した活動リストに max_shift=0 を適用した解を注入
+                    // makespan 最小側のパレートフロントを補強する
+                    if (prob_ms) {
+                        prob->setOutputMaxShift(0);
+                        for (int i = 0; i < f0->size(); ++i) {
+                            Solution *copy = new Solution(f0->get(i));
+                            prob->evaluate(copy);
+                            result->add(copy);
+                        }
+                        prob->setOutputMaxShift(-1);
+                        syncPrint("    [" + encTag + " S" + std::to_string(s)
+                                  + "] Injected " + std::to_string(f0->size())
+                                  + " max_shift=0 versions\n");
+                    }
                 }
             }
             delete pop;
@@ -408,16 +437,14 @@ SolutionSet* EncodingComparisonRunner_P1::runEncoding(int enc) const {
 }
 
 void EncodingComparisonRunner_P1::runAll() const {
-    const string costsFile = "costs_" + prefix_ + ".csv";
-    if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs.csv");
+    const string costsFile = "costs/" + prefix_ + "/costs_" + prefix_ + ".csv";
+    EncUtil::ensureDir("costs/" + prefix_);
+    if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs/" + prefix_ + "/costs.csv");
 
-    struct Cond { double rr; bool rv; };
-    const vector<Cond> conditions = {
-        {0.00, false}, {0.00, true},
-        {0.25, false}, {0.25, true},
-        {0.50, false}, {0.50, true},
-        {0.75, false}, {0.75, true},
-    };
+    using Cond = RCPSP_Cond;
+    // 比較対象は RR<=0.50（6条件）。RR=0.75 は限界条件用に RCPSP_Conditions.h で別枠管理
+    // （再有効化する場合は RCPSP_ALL_CONDITIONS() に差し替える）。
+    const vector<Cond> conditions = RCPSP_STANDARD_CONDITIONS();
     const vector<pair<int,string>> encodings = {{0,"SchedObj"},{1,"MaxShift"}};
 
     cout << "\n============================================================\n";
@@ -504,6 +531,9 @@ public:
         int    evalsPerStrategy      = 50000;
         int    numStrategiesSchedObj = 4;
         int    numStrategiesMaxShift = 4;
+        // true にすると通常ランの後に P1 MaxShift のノベルティフィルタ版を追加実行する。
+        // false（デフォルト）のときは何も変わらない。
+        bool   enableNoveltyFilter   = false;
     };
 
     explicit EncodingComparisonRunner_All(Config cfg)
@@ -512,7 +542,9 @@ public:
     {}
 
     // splitMode: "P1"/"P2"/"P3"、enc=0:SchedObj / enc=1:MaxShift
-    SolutionSet* runEncoding(const string &splitMode, int enc) const;
+    // noveltyFilter=true のときは NF 版（ログ/出力に _NF サフィックス付与）
+    SolutionSet* runEncoding(const string &splitMode, int enc,
+                             bool noveltyFilter = false) const;
 
     void runAll() const;
 
@@ -522,9 +554,10 @@ private:
 };
 
 SolutionSet* EncodingComparisonRunner_All::runEncoding(
-        const string &splitMode, int enc) const
+        const string &splitMode, int enc, bool noveltyFilter) const
 {
-    const string encTag = (enc == 0) ? "SchedObj" : "MaxShift";
+    const string encTag = ((enc == 0) ? "SchedObj" : "MaxShift")
+                          + string(noveltyFilter ? "_NF" : "");
     const string ctag   = EncUtil::toCondTag(cfg_.rr, cfg_.rv);
     const int    numStr = (enc == 0) ? cfg_.numStrategiesSchedObj
                                      : cfg_.numStrategiesMaxShift;
@@ -579,23 +612,22 @@ SolutionSet* EncodingComparisonRunner_All::runEncoding(
     SolutionSet *pareto = EncUtil::runStrategies(
             factory, numStr,
             cfg_.populationSize, cfg_.evalsPerStrategy,
-            splitMode + "_" + encTag);
+            splitMode + "_" + encTag,
+            noveltyFilter);
     return pareto;
 }
 
 void EncodingComparisonRunner_All::runAll() const {
-    const string costsFile = "costs_" + prefix_ + ".csv";
-    if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs.csv");
+    const string costsFile = "costs/" + prefix_ + "/costs_" + prefix_ + ".csv";
+    EncUtil::ensureDir("costs/" + prefix_);
+    if (EncUtil::fileExists(costsFile)) EncUtil::copyFileBinary(costsFile, "costs/" + prefix_ + "/costs.csv");
 
-    struct Cond { double rr; bool rv; };
-    const vector<Cond> conditions = {
-        {0.00, false}, {0.00, true},
-        {0.25, false}, {0.25, true},
-        {0.50, false}, {0.50, true},
-        {0.75, false}, {0.75, true},
-    };
+    using Cond = RCPSP_Cond;
+    // 比較対象は RR<=0.50（6条件）。RR=0.75 は限界条件用に RCPSP_Conditions.h で別枠管理
+    // （再有効化する場合は RCPSP_ALL_CONDITIONS() に差し替える）。
+    const vector<Cond> conditions = RCPSP_STANDARD_CONDITIONS();
     const vector<string>       splitModes = {"P1", "P2", "P3"};
-    const vector<pair<int,string>> encodings = {/*{0,"SchedObj"},*/{1,"MaxShift"}};  // 計算時間比較のため SchedObj を一時無効化
+    const vector<pair<int,string>> encodings = {{0,"SchedObj"},{1,"MaxShift"}};  // 計算時間比較のため SchedObj を一時無効化
 
     cout << "\n============================================================\n";
     cout << " All Encoding Comparison Run (P1/P2/P3 x SchedObj/MaxShift)\n";
@@ -651,6 +683,45 @@ void EncodingComparisonRunner_All::runAll() const {
                         prefix_ + "_" + ctag + "_" + m + "_" + encTag;
                 EncUtil::writeResultFiles(outPrefix, pareto, prob);
 
+                // ---- P1 MaxShift 後処理局所探索 ----
+                if (m == "P1" && enc == 1) {
+                    FrontLocalSearch::Config lsCfg;
+                    lsCfg.maxPasses = 5;
+                    lsCfg.deltas    = {0, 1, 2, 4};
+                    FrontLocalSearch ls(prob, lsCfg);
+
+                    std::vector<FrontLocalSearch::SolStat> lsStats;
+                    SolutionSet *enhanced = ls.apply(pareto, &lsStats);
+
+                    // MaxShift_LS タグで出力
+                    const string lsPrefix =
+                            prefix_ + "_" + ctag + "_" + m + "_MaxShift_LS";
+                    EncUtil::writeResultFiles(lsPrefix, enhanced, prob);
+
+                    // LS サマリ
+                    int improvedCount = 0;
+                    double totalReduction = 0.0;
+                    for (const auto &s : lsStats) {
+                        if (s.costReduction > 1e-9) {
+                            ++improvedCount;
+                            totalReduction += s.costReduction;
+                        }
+                    }
+                    cout << "  [LS] " << improvedCount << "/" << lsStats.size()
+                         << " improved, total_reduction="
+                         << fixed << setprecision(1) << totalReduction
+                         << ", PF_LS=" << enhanced->size() << "\n";
+
+                    // LS ログ
+                    const string lsLogDir = "logs/localsearch/";
+                    EncUtil::ensureDir(lsLogDir);
+                    FrontLocalSearch::writeLog(
+                            lsLogDir + "ls_log_" + prefix_ + "_" + ctag + ".csv",
+                            lsStats);
+
+                    delete enhanced;
+                }
+
                 // サマリ集計
                 const string key = m + "_" + encTag;
                 minMsMap[key]   = 1e9;
@@ -680,6 +751,65 @@ void EncodingComparisonRunner_All::runAll() const {
 
     cout << string(14 + 12*6, '-') << "\n";
     cout << "[ALL DONE] " << prefix_ << "\n\n";
+
+    // ================================================================
+    // ノベルティフィルタ追加ラン (cfg_.enableNoveltyFilter == true のとき)
+    //   P1 MaxShift のみ、全 8 条件を通常ランと同じ設定で再実行する。
+    //   出力ファイル名: FUN_ENC_*_P1_MaxShift_NF.txt / SCHED_ENC_*_P1_MaxShift_NF.txt
+    //   ログファイル名: manytoone_log_*_MaxShift_NF.csv
+    //   元の NSGA-II ランには一切影響しない（このブロック以外は変更なし）。
+    // ================================================================
+    if (cfg_.enableNoveltyFilter) {
+        cout << "\n============================================================\n";
+        cout << " [NF] Novelty Filter 試験ラン: P1 MaxShift\n";
+        cout << " Instance: " << cfg_.instanceFile << "\n";
+        cout << " popSize=" << cfg_.populationSize
+             << "  evalsPerStrategy=" << cfg_.evalsPerStrategy << "\n";
+        cout << "============================================================\n";
+
+        cout << "\n" << left  << setw(14) << "Condition"
+                     << right << setw(16) << "NF_min_makespan"
+                              << setw(14) << "NF_min_cost"
+                              << setw(10) << "PF_size" << "\n";
+        cout << string(54, '-') << "\n";
+
+        for (const auto &c : conditions) {
+            RCPSP_Problem::resetGlobalCostSeries();
+            if (EncUtil::fileExists(costsFile))
+                EncUtil::copyFileBinary(costsFile, "costs.csv");
+
+            const string ctag = EncUtil::toCondTag(c.rr, c.rv);
+            Config modCfg = cfg_;
+            modCfg.rr = c.rr;
+            modCfg.rv = c.rv;
+            EncodingComparisonRunner_All runner(modCfg);
+
+            // noveltyFilter = true で実行
+            SolutionSet *pareto = runner.runEncoding("P1", /*enc=*/1, /*noveltyFilter=*/true);
+
+            // 出力ファイル: FUN_ENC_*_P1_MaxShift_NF.txt
+            RCPSP_Problem *prob = (RCPSP_Problem*)new RCPSP_Problem_MaxShift(
+                    cfg_.instanceFile, 1, c.rr, c.rv);
+            const string outPrefix = prefix_ + "_" + ctag + "_P1_MaxShift_NF";
+            EncUtil::writeResultFiles(outPrefix, pareto, prob);
+
+            double minMs   = 1e9;
+            double minCost = 1e9;
+            for (int i = 0; i < pareto->size(); ++i) {
+                minMs   = std::min(minMs,   pareto->get(i)->getObjective(0));
+                minCost = std::min(minCost, pareto->get(i)->getObjective(1));
+            }
+            cout << left  << setw(14) << ctag
+                 << right << setw(16) << (minMs < 1e8 ? to_string((int)minMs) : "---")
+                          << setw(14) << fixed << setprecision(1) << minCost
+                          << setw(10) << pareto->size() << "\n";
+
+            delete pareto;
+            delete prob;
+        }
+        cout << string(54, '-') << "\n";
+        cout << "[NF DONE] " << prefix_ << "\n\n";
+    }
 }
 
 // ============================================================
@@ -704,15 +834,339 @@ static const vector<string> ALL_INSTANCES = {
     "j30.sm/j3011_1.sm", "j30.sm/j3017_1.sm", "j30.sm/j3026_1.sm",
     "j30.sm/j3047_1.sm", "j30.sm/j309_1.sm",
     // j60 (_1 instances: 48個)
-    "j60.sm/j6016_1.sm", "j60.sm/j6018_1.sm", "j60.sm/j6023_1.sm",
-    "j60.sm/j6024_1.sm", "j60.sm/j609_1.sm",
-    // j90 (_1 instances: 48個)
-    "j90.sm/j9015_1.sm", "j90.sm/j9041_1.sm", "j90.sm/j9044_1.sm",
-    "j90.sm/j905_1.sm",  "j90.sm/j909_1.sm",
-    // j120 (_1 instances: 60個)
-    "j120.sm/j12011_1.sm", "j120.sm/j12012_1.sm", "j120.sm/j12015_1.sm",
-    "j120.sm/j12022_1.sm", "j120.sm/j12035_1.sm",
+    // "j60.sm/j6016_1.sm", "j60.sm/j6018_1.sm", "j60.sm/j6023_1.sm",
+    // "j60.sm/j6024_1.sm", "j60.sm/j609_1.sm",
+    // // j90 (_1 instances: 48個)
+    // "j90.sm/j9015_1.sm", "j90.sm/j9041_1.sm", "j90.sm/j9044_1.sm",
+    // "j90.sm/j905_1.sm",  "j90.sm/j909_1.sm",
+    // // j120 (_1 instances: 60個)
+    // "j120.sm/j12011_1.sm", "j120.sm/j12012_1.sm", "j120.sm/j12015_1.sm",
+    // "j120.sm/j12022_1.sm", "j120.sm/j12035_1.sm",
 };
+
+// ============================================================
+//  runManyToOneTest
+//
+//  「活動リストが異なるのにスケジュール・評価値が同じ」という
+//  many-to-one 特性を実証する検証関数。
+//
+//  手順:
+//    1. 指定インスタンスを読み込む（maxShift=0 固定）
+//    2. N 個のランダムトポロジカル順序を生成
+//    3. 各順序で evaluate() → startTimes_ と目的値を記録
+//    4. 重複スケジュールの数・割合を報告する
+//
+//  呼び出し: TestJmetalCpp --many-to-one <instanceFile> [N]
+// ============================================================
+static void runManyToOneTest(const string &instanceFile, int N = 30,
+                              double rr = 0.0, bool rv = false)
+{
+    cout << "\n========================================\n"
+         << "[ManyToOne] instance=" << instanceFile
+         << "  RR=" << rr << "  RV=" << rv
+         << "  N=" << N << "\n"
+         << "========================================\n";
+
+    // maxShift=0（EST 配置のみ）で検証
+    RCPSP_Problem_MaxShift prob(instanceFile, /*strategy=*/1, rr, rv);
+    const int n = prob.getNumJobs();
+
+    cout << "  jobs=" << n << "\n";
+
+    // activity list (vars[0..n-1]) の文字列表現 → (makespan, cost, startTimes) のマップ
+    using SchedKey = std::vector<int>;  // startTimes_ ベクタをキーに使う
+    struct Record {
+        std::vector<int> actList;
+        int    makespan;
+        double cost;
+    };
+    std::map<SchedKey, std::vector<Record>> schedMap;
+
+    for (int trial = 0; trial < N; ++trial) {
+        Solution *sol = prob.createRandomTopoSolution();
+        auto &vars = sol->getVars();
+
+        // max_shift をすべて 0 に強制（EST 配置で比較）
+        for (int i = n; i < 2 * n; ++i) vars[i] = 0;
+
+        prob.evaluate(sol);
+
+        Record rec;
+        rec.actList.assign(vars.begin(), vars.begin() + n);
+        rec.makespan = static_cast<int>(sol->getObjective(0));
+        rec.cost     = sol->getObjective(1);
+
+        SchedKey key = sol->startTimes_;
+
+        schedMap[key].push_back(rec);
+        delete sol;
+    }
+
+    // 結果集計
+    int uniqueScheds   = static_cast<int>(schedMap.size());
+    int collisionCount = 0;
+    for (auto &[key, recs] : schedMap)
+        if (recs.size() > 1) collisionCount += static_cast<int>(recs.size()) - 1;
+
+    cout << "\n  試行数          : " << N << "\n"
+         << "  ユニーク スケジュール数 : " << uniqueScheds << "\n"
+         << "  重複ヒット数      : " << collisionCount << "\n";
+
+    // 重複のあるグループを最大 3 件表示
+    int shown = 0;
+    for (auto &[key, recs] : schedMap) {
+        if (recs.size() < 2) continue;
+        cout << "\n  --- 重複グループ (スケジュール同一, " << recs.size() << "件) ---\n";
+        cout << "    startTimes: [";
+        for (int t : key) cout << t << " ";
+        cout << "]\n";
+        for (auto &r : recs) {
+            cout << "    actList=[";
+            for (int j : r.actList) cout << j << " ";
+            cout << "]  makespan=" << r.makespan
+                 << "  cost=" << r.cost << "\n";
+        }
+        if (++shown >= 3) break;
+    }
+
+    if (collisionCount == 0) {
+        cout << "\n  -> すべての活動リストが異なるスケジュールを生成しました。\n"
+             << "     (N を増やすか、resource が緩い問題で試してください)\n";
+    } else {
+        cout << "\n  -> many-to-one 確認: "
+             << collisionCount << " 件の重複スケジュールを検出しました。\n";
+    }
+    cout << "========================================\n\n";
+}
+
+// ============================================================
+//  runCostCollisionTest
+//
+//  「startTimes_ が異なるのに total cost（目的1）が完全一致する」
+//  現象の機構を特定するための診断モード。
+//
+//  呼び出し: TestJmetalCpp --cost-collision <instanceFile> [N=2000] [RR=0.0] [RV=0]
+// ============================================================
+static void runCostCollisionTest(const string &instanceFile, int N = 2000,
+                                  double rr = 0.0, bool rv = false)
+{
+    cout << "\n========================================\n"
+         << "[CostCollision] instance=" << instanceFile
+         << "  RR=" << rr << "  RV=" << rv
+         << "  N=" << N << "\n"
+         << "========================================\n";
+
+    RCPSP_Problem_MaxShift prob(instanceFile, /*strategy=*/3, rr, rv);
+    const int n = prob.getNumJobs();
+    const int nRes = prob.getNumResources();
+
+    // ホライゾン T の計算（evaluate と同じ方式）
+    int T = 0;
+    {
+        const auto &dur = prob.getDurations();
+        for (int d : dur) T += d;
+    }
+
+    cout << "  jobs=" << n << "  resources=" << nRes << "  horizon=" << T << "\n";
+
+    // 解を生成・評価
+    struct SolRecord {
+        double makespan;
+        double cost;
+        vector<int> startTimes;
+    };
+    vector<SolRecord> records;
+    records.reserve(N);
+
+    for (int i = 0; i < N; ++i) {
+        Solution *sol = prob.createRandomTopoSolution();
+        // max_shift はランダム初期化のまま（多様な窓を試すため 0 に強制しない）
+        prob.evaluate(sol);
+        SolRecord rec;
+        rec.makespan   = sol->getObjective(0);
+        rec.cost       = sol->getObjective(1);
+        rec.startTimes = sol->startTimes_;
+        records.push_back(std::move(rec));
+        delete sol;
+    }
+
+    // (makespan, cost) でグルーピング（ビット完全一致）
+    using ObjKey = pair<double, double>;
+    map<ObjKey, vector<int>> objGroups;  // key -> indices
+    for (int i = 0; i < (int)records.size(); ++i) {
+        objGroups[{records[i].makespan, records[i].cost}].push_back(i);
+    }
+
+    // 「同一目的値だが startTimes_ が異なる」グループを検出
+    struct CollisionGroup {
+        ObjKey key;
+        vector<int> indices;  // このグループに属する解のインデックス
+        // 仮説判定結果
+        bool hypothesis_a = false;  // 対称スワップ
+        bool hypothesis_b = false;  // ダミー/需要ゼロ
+        bool hypothesis_c = false;  // 丸め一致（double 完全一致なら false）
+    };
+    vector<CollisionGroup> collisions;
+
+    for (auto &[key, idxs] : objGroups) {
+        if (idxs.size() < 2) continue;
+        // startTimes が全て同一かチェック
+        bool allSame = true;
+        for (int k = 1; k < (int)idxs.size(); ++k) {
+            if (records[idxs[k]].startTimes != records[idxs[0]].startTimes) {
+                allSame = false;
+                break;
+            }
+        }
+        if (allSame) continue;  // 目的値も startTimes も同一 → 衝突ではない
+
+        CollisionGroup cg;
+        cg.key = key;
+        cg.indices = idxs;
+        collisions.push_back(std::move(cg));
+    }
+
+    const auto &dur    = prob.getDurations();
+    const auto &demand = prob.getDemand();
+
+    // 最大5グループについて詳細ダンプ
+    int shown = 0;
+    int count_a = 0, count_b = 0, count_c = 0;
+
+    for (auto &cg : collisions) {
+        // 代表ペア（先頭2つ）で分析
+        const auto &st0 = records[cg.indices[0]].startTimes;
+        const auto &st1 = records[cg.indices[1]].startTimes;
+
+        // 差分ジョブの特定
+        vector<int> diffJobs;
+        for (int j = 0; j < n; ++j) {
+            if (j < (int)st0.size() && j < (int)st1.size() && st0[j] != st1[j])
+                diffJobs.push_back(j);
+        }
+
+        // 仮説 (b): 差分ジョブが全て duration=0 または demand 全ゼロ
+        bool allDummy = true;
+        for (int j : diffJobs) {
+            bool isDummy = (dur[j] == 0);
+            if (!isDummy && j < (int)demand.size()) {
+                bool allZeroDemand = true;
+                for (int k = 0; k < nRes && k < (int)demand[j].size(); ++k) {
+                    if (demand[j][k] != 0) { allZeroDemand = false; break; }
+                }
+                isDummy = allZeroDemand;
+            }
+            if (!isDummy) { allDummy = false; break; }
+        }
+        cg.hypothesis_b = allDummy && !diffJobs.empty();
+
+        // 仮説 (a): 差分ジョブ集合の中に duration & demand が完全同一のペアがあるか
+        bool hasSymmetricPair = false;
+        for (int i = 0; i < (int)diffJobs.size() && !hasSymmetricPair; ++i) {
+            for (int k = i + 1; k < (int)diffJobs.size(); ++k) {
+                int ji = diffJobs[i], jk = diffJobs[k];
+                if (dur[ji] == dur[jk] && ji < (int)demand.size() && jk < (int)demand.size()
+                    && demand[ji] == demand[jk]) {
+                    hasSymmetricPair = true;
+                    break;
+                }
+            }
+        }
+        cg.hypothesis_a = hasSymmetricPair;
+
+        // 仮説 (c): double 完全一致 → この時点では false（ビット完全一致でグルーピング済み）
+        cg.hypothesis_c = false;
+
+        if (cg.hypothesis_a) ++count_a;
+        if (cg.hypothesis_b) ++count_b;
+        if (cg.hypothesis_c) ++count_c;
+
+        // 詳細出力（最大5グループ）
+        if (shown < 5) {
+            ++shown;
+            cout << "\n  --- Collision Group #" << shown
+                 << " (" << cg.indices.size() << " solutions, same objectives) ---\n";
+            printf("    makespan = %.17g\n", cg.key.first);
+            printf("    cost     = %.17g\n", cg.key.second);
+
+            // per-job コスト
+            double sumJobCost0 = 0.0, sumJobCost1 = 0.0;
+            cout << "    Differing jobs (" << diffJobs.size() << "):\n";
+            cout << "      " << left << setw(6) << "Job"
+                 << setw(6) << "Dur"
+                 << setw(20) << "Demand"
+                 << setw(10) << "Start_A"
+                 << setw(10) << "Start_B"
+                 << setw(16) << "JobCost_A"
+                 << setw(16) << "JobCost_B" << "\n";
+
+            for (int j : diffJobs) {
+                double jc0 = prob.computeJobCostAt(j, st0[j], T);
+                double jc1 = prob.computeJobCostAt(j, st1[j], T);
+                sumJobCost0 += jc0;
+                sumJobCost1 += jc1;
+
+                // demand ベクトル文字列
+                string demStr = "[";
+                if (j < (int)demand.size()) {
+                    for (int k = 0; k < nRes && k < (int)demand[j].size(); ++k) {
+                        if (k > 0) demStr += ",";
+                        demStr += to_string(demand[j][k]);
+                    }
+                }
+                demStr += "]";
+
+                cout << "      " << left << setw(6) << j
+                     << setw(6) << dur[j]
+                     << setw(20) << demStr
+                     << setw(10) << st0[j]
+                     << setw(10) << st1[j];
+                printf("%-16.6f%-16.6f\n", jc0, jc1);
+            }
+            printf("    Sum of diff-job costs: A=%.17g  B=%.17g  match=%s\n",
+                   sumJobCost0, sumJobCost1,
+                   (sumJobCost0 == sumJobCost1) ? "YES" : "NO");
+            cout << "    Symmetric pair (hyp a): " << (cg.hypothesis_a ? "YES" : "NO") << "\n";
+            cout << "    All dummy/zero (hyp b): " << (cg.hypothesis_b ? "YES" : "NO") << "\n";
+        }
+    }
+
+    // サマリ
+    int uniqueObjCount = static_cast<int>(objGroups.size());
+    cout << "\n  ======== Summary ========\n"
+         << "  Total solutions:                  " << N << "\n"
+         << "  Unique (makespan,cost) pairs:     " << uniqueObjCount << "\n"
+         << "  Collision groups (same obj, diff sched): " << collisions.size() << "\n"
+         << "  Hypothesis (a) symmetric swap:    " << count_a << "\n"
+         << "  Hypothesis (b) dummy/zero demand: " << count_b << "\n"
+         << "  Hypothesis (c) rounding:          " << count_c << " (always 0 with exact match)\n";
+
+    if (collisions.empty()) {
+        cout << "\n  -> No exact cost collisions found.\n";
+        // 近似一致の参考表示
+        int approxCollisions = 0;
+        map<pair<int,long long>, vector<int>> approxGroups;
+        for (int i = 0; i < (int)records.size(); ++i) {
+            int ms = static_cast<int>(records[i].makespan);
+            long long cRound = static_cast<long long>(std::round(records[i].cost / 1e-6));
+            approxGroups[{ms, cRound}].push_back(i);
+        }
+        for (auto &[k, idxs] : approxGroups) {
+            if (idxs.size() >= 2) {
+                // startTimes が異なるペアがあるかチェック
+                for (int i = 1; i < (int)idxs.size(); ++i) {
+                    if (records[idxs[i]].startTimes != records[idxs[0]].startTimes) {
+                        ++approxCollisions;
+                        break;
+                    }
+                }
+            }
+        }
+        cout << "     Approx collisions (cost rounded to 1e-6): " << approxCollisions << "\n";
+    }
+
+    cout << "========================================\n\n";
+}
 
 void runInstance(const string &instanceFile) {
     // 共通設定
@@ -726,12 +1180,17 @@ void runInstance(const string &instanceFile) {
     cfg.evalsPerStrategy       = 50000;  // 評価回数=50000 (世代数≒500)  デバッグ: 10000
     cfg.numStrategiesSchedObj  = 4;      // 本番: 4  デバッグ: 2
     cfg.numStrategiesMaxShift  = 4;      // 本番: 4  デバッグ: 2
+    // ノベルティフィルタ試験: false → 元の NSGA-II のみ実行（デフォルト）
+    //                         true  → 通常ランの後に P1 MaxShift NF 版を追加実行
+    cfg.enableNoveltyFilter    = true;
 
     const string prefix = EncUtil::toBaseNoExt(instanceFile);
 
     // ---- 感度分析（MaxShift 上限 T/4 の妥当性検証） ----
     {
-        const string csvPath = "maxshift_sensitivity_" + prefix + "_RR000_RV0.csv";
+        const string sensDir = "analysis/sensitivity/" + prefix + "/";
+        EncUtil::ensureDir(sensDir);
+        const string csvPath = sensDir + "maxshift_sensitivity_" + prefix + "_RR000_RV0.csv";
         MaxShiftSensitivityAnalyzer sa(instanceFile, 0.0, false);
         sa.runAndSave(csvPath, 40);
     }
@@ -747,6 +1206,28 @@ void runInstance(const string &instanceFile) {
 
 int main(int argc, char **argv) {
     try {
+        // 検証モード: TestJmetalCpp --many-to-one <instance> [N] [RR] [RV]
+        //   例: .\TestJmetalCpp.exe --many-to-one j30.sm/j309_1.sm 100 0.50 1
+        if (argc >= 2 && string(argv[1]) == "--many-to-one") {
+            const string inst = (argc >= 3) ? argv[2] : "j30.sm/j3011_1.sm";
+            const int    N    = (argc >= 4) ? std::stoi(argv[3]) : 50;
+            const double rr   = (argc >= 5) ? std::stod(argv[4]) : 0.0;
+            const bool   rv   = (argc >= 6) && (std::stoi(argv[5]) != 0);
+            runManyToOneTest(inst, N, rr, rv);
+            return 0;
+        }
+
+        // 診断モード: TestJmetalCpp --cost-collision <instance> [N] [RR] [RV]
+        //   例: .\TestJmetalCpp.exe --cost-collision j30.sm/j3011_1.sm 2000 0.0 0
+        if (argc >= 2 && string(argv[1]) == "--cost-collision") {
+            const string inst = (argc >= 3) ? argv[2] : "j30.sm/j3011_1.sm";
+            const int    N    = (argc >= 4) ? std::stoi(argv[3]) : 2000;
+            const double rr   = (argc >= 5) ? std::stod(argv[4]) : 0.0;
+            const bool   rv   = (argc >= 6) && (std::stoi(argv[5]) != 0);
+            runCostCollisionTest(inst, N, rr, rv);
+            return 0;
+        }
+
         if (argc >= 2) {
             // 単一インスタンス実行
             const string instanceFile = argv[1];

@@ -86,7 +86,7 @@ static void checkFeasibility(RCPSP_Problem_MaxShift *prob,
 // 1 回分（4戦略 combined front）を実行して ms*/cost* を返す
 RunResult runOnce(const string &instFile, double rr, bool rv,
                   int popSize, int evalsPerStrategy, int numStr,
-                  int a1flag)
+                  int a1flag, int b8flag)
 {
     using StratResult = pair<SolutionSet*, RCPSP_Problem_MaxShift*>;
     vector<future<StratResult>> futures;
@@ -97,6 +97,7 @@ RunResult runOnce(const string &instFile, double rr, bool rv,
             [=]() -> StratResult {
                 auto *prob = new RCPSP_Problem_MaxShift(instFile, s, rr, rv);
                 prob->resetEvalCounter();
+                prob->setResidualTieBreak(b8flag != 0);  // B8: 資源平準化 tie-break
 
                 Algorithm *algo = new NSGAII(prob);
                 int popSz  = popSize;
@@ -175,17 +176,19 @@ int main(int argc, char **argv) {
     const int  popSize     = 100;
     const int  numStr      = 4;
 
-    cout << "=== Baseline vs A1 (priority-rule seed) A/B test ===\n";
+    cout << "=== A/B test: baseline / A1 seed / B8 residual tie-break ===\n";
     cout << "instance=" << instFile << "  rr=" << rr << "  rv=" << rv
          << "  trials=" << trials << "  evals/strategy=" << evalsPerStrategy
          << "  popSize=" << popSize << "  strategies=" << numStr << "\n\n";
 
-    // 条件: {name, a1flag}
-    // （旧 A3/FBI 条件は不採用のため削除。残るのは OFF と A1 priority-rule のみ）
-    struct Cond { const char *name; int a1; };
+    // 条件: {name, a1flag, b8flag}
+    // （旧 A3/FBI 条件は不採用のため削除。B8=資源平準化 tie-break を A/B 追加）
+    struct Cond { const char *name; int a1; int b8; };
     const vector<Cond> conds = {
-        {"OFF (baseline)", 0},
-        {"A1  (priority-rule)", 1},
+        {"OFF (baseline)", 0, 0},
+        {"A1  (priority-rule)", 1, 0},
+        {"B8  (residual tie-break)", 0, 1},
+        {"A1+B8 (combined)", 1, 1},
     };
 
     vector<vector<RunResult>> results(conds.size());
@@ -196,7 +199,7 @@ int main(int argc, char **argv) {
         for (int t = 0; t < trials; ++t) {
             RunResult r = runOnce(instFile, rr, rv, popSize,
                                   evalsPerStrategy, numStr,
-                                  conds[c].a1);
+                                  conds[c].a1, conds[c].b8);
             cout << "  trial " << (t + 1) << ": ms*=" << (int)r.minMs
                  << "  cost@ms*=" << fixed << setprecision(0) << r.costAtMinMs
                  << "  minCost=" << r.minCost
