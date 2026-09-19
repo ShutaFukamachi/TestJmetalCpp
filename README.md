@@ -386,13 +386,13 @@ python ../visualize_maxshiftdur.py --dir .
 
 ---
 
-## 日次メンテナンス Routines
+## メンテナンスプロトコル（Claude Code）
 
-毎日終業時に Claude Code Routines が自動実行され，以下の 2 タスクを行う。
+日次自動実行ではなく，Claude Code がコード変更のたびに `CLAUDE.md` のプロトコルに従い，セッション内で以下の 2 タスクを遵守する運用。
 
-### タスク 1 — `.miss_memory/` の更新
+### タスク 1 — `.miss_memory/` の更新（失敗ログ）
 
-今日の Claude Code セッション履歴を検索し，以下に該当するバグ・ミスを抽出して教訓ファイルを追記する。
+Claude Code はコード変更前に `.miss_memory/` の既存教訓ファイルすべてに目を通し，過去のバグ・ミスの再発を防ぐ。バグを修正した際や重要な実装上の注意点を発見した際は，以下に該当する内容を新しい教訓ファイルとして記録する（`CLAUDE.md` のプロトコルに基づく，Claude Code によるセッション内の手動運用）。
 
 **記録対象**
 - コンパイルエラー・クラッシュの診断と修正
@@ -439,7 +439,7 @@ YYYY-MM-DD
 
 ### タスク 2 — `README.md` の更新
 
-`main_NSGAII_RCPSP_EncodingComparison.cpp` と `main_NSGAII_RCPSP_MaxShiftDur.cpp` を読み込み，以下の項目が README と一致しているか確認・修正する。
+コード変更のたびに，`main_NSGAII_RCPSP_EncodingComparison.cpp` と `main_NSGAII_RCPSP_MaxShiftDur.cpp` を読み込み，以下の項目が README と一致しているか確認・修正する。
 
 | 確認項目 | 対象箇所 |
 |---|---|
