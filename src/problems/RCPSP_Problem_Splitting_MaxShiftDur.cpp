@@ -15,8 +15,9 @@ RCPSP_Problem_Splitting_MaxShiftDur::RCPSP_Problem_Splitting_MaxShiftDur(
         ActivitySplittingMode mode,
         int                   strategy,
         double                rr,
-        bool                  rv)
-    : RCPSP_Problem_MaxShiftDur(filename, strategy, rr, rv)
+        bool                  rv,
+        const std::string    &costDir)
+    : RCPSP_Problem_MaxShiftDur(filename, strategy, rr, rv, costDir)
     , mode_(mode)
 {
     const char *modeStr = (mode == ActivitySplittingMode::P2) ? "P2" : "P3";

@@ -35,8 +35,12 @@ public:
 
     // instanceFile : PSPLIB .sm ファイルパス
     // rr / rv      : 資源削減率 / 時間変動フラグ
+    // costDir      : コスト表ディレクトリ（既定 "costs" = 正本）。正本以外を指定した
+    //   場合、runAndSave() の出力先を cwd ではなく results/EXT_COST/sensitivity/<prefix>/
+    //   に切り替える（.miss_memory/041,042 参照）。
     MaxShiftSensitivityAnalyzer(const std::string& instanceFile,
-                                 double rr = 0.0, bool rv = false);
+                                 double rr = 0.0, bool rv = false,
+                                 const std::string& costDir = "costs");
     ~MaxShiftSensitivityAnalyzer();
 
     // ----------------------------------------------------------------
@@ -63,6 +67,7 @@ private:
     std::string instanceFile_;
     double      rr_;
     bool        rv_;
+    std::string costDir_;
 
     // Solution の vars[0..n-1] から活動リストを抽出
     static std::vector<int> extractActivityList(Solution* sol, int n);

@@ -22,8 +22,9 @@ RCPSP_Problem_Splitting::RCPSP_Problem_Splitting(
         ActivitySplittingMode mode,
         int    strategy,
         double rr,
-        bool   rv)
-    : RCPSP_Problem(filename, strategy, rr, rv), mode_(mode)
+        bool   rv,
+        const std::string &costDir)
+    : RCPSP_Problem(filename, strategy, rr, rv, costDir), mode_(mode)
 {
     const char *modeStr = (mode == ActivitySplittingMode::P2) ? "P2" : "P3";
     std::cout << "[RCPSP_Problem_Splitting] mode=" << modeStr << "\n";

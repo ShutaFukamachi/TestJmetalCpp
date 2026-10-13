@@ -18,10 +18,13 @@ public:
     //   デフォルト値 rr=0.0, rv=false のため
     //   既存の呼び出し new RCPSP_Problem(file) はそのまま動く
     // ============================================================
+    // costDir : コスト表ディレクトリ（既定 "costs" = 正本。既存呼び出しは全て
+    //   省略するため動作は変わらない。拡張コスト表等の代替表を読ませたい場合のみ指定する）
     explicit RCPSP_Problem(const std::string &filename,
                             int    strategy = 4,
                             double rr       = 0.0,
-                            bool   rv       = false);
+                            bool   rv       = false,
+                            const std::string &costDir = "costs");
 
     ~RCPSP_Problem() override;
 

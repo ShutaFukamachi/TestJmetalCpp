@@ -40,7 +40,8 @@ public:
     explicit RCPSP_Problem_MaxShift(const std::string &filename,
                                      int    strategy = 4,
                                      double rr       = 0.0,
-                                     bool   rv       = false);
+                                     bool   rv       = false,
+                                     const std::string &costDir = "costs");
 
     // スケジューリング評価（max_shift エンコーディング版）
     void evaluate(Solution *solution) override;

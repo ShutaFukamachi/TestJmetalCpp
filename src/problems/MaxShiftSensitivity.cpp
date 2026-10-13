@@ -1,22 +1,25 @@
 #include "MaxShiftSensitivity.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 
+namespace fs = std::filesystem;
+
 // ============================================================
 //  コンストラクタ / デストラクタ
 // ============================================================
 MaxShiftSensitivityAnalyzer::MaxShiftSensitivityAnalyzer(
-        const std::string& instanceFile, double rr, bool rv)
-    : instanceFile_(instanceFile), rr_(rr), rv_(rv)
+        const std::string& instanceFile, double rr, bool rv, const std::string& costDir)
+    : instanceFile_(instanceFile), rr_(rr), rv_(rv), costDir_(costDir)
 {
     // strategy=4 (upper=T/2) で構築。
     // setOutputMaxShift() で上限を超える値も指定できるため、
     // 問題の上限設定は感度分析の結果に影響しない。
-    prob_ = new RCPSP_Problem_MaxShift(instanceFile, 4, rr, rv);
+    prob_ = new RCPSP_Problem_MaxShift(instanceFile, 4, rr, rv, costDir);
 }
 
 MaxShiftSensitivityAnalyzer::~MaxShiftSensitivityAnalyzer() {
@@ -128,9 +131,17 @@ void MaxShiftSensitivityAnalyzer::runAndSave(
     const auto sweepCost = sweep(alCost, steps);
 
     // --- CSV 出力 ---
-    std::ofstream ofs(outCsvPath);
+    // costDir_ が正本以外のとき、cwd ではなく results/EXT_COST/sensitivity/<prefix>/
+    // に書く（.miss_memory/041,042: cwd 直書きは正本コスト表実行と衝突しうるため）。
+    std::string actualPath = outCsvPath;
+    if (costDir_ != "costs") {
+        const std::string dir = "results/EXT_COST/sensitivity/" + prob_->getInstancePrefix() + "/";
+        fs::create_directories(dir);
+        actualPath = dir + outCsvPath;
+    }
+    std::ofstream ofs(actualPath);
     if (!ofs) {
-        std::cerr << "[MaxShiftSensitivity] Cannot open: " << outCsvPath << "\n";
+        std::cerr << "[MaxShiftSensitivity] Cannot open: " << actualPath << "\n";
         return;
     }
 
@@ -152,7 +163,7 @@ void MaxShiftSensitivityAnalyzer::runAndSave(
             << static_cast<int>(sweepCost[i].makespan) << ","
             << sweepCost[i].cost << "\n";
     }
-    std::cout << "[MaxShiftSensitivity] Saved: " << outCsvPath << "\n";
+    std::cout << "[MaxShiftSensitivity] Saved: " << actualPath << "\n";
 
     // --- コンソールサマリ ---
     // コストが最小になる max_shift を特定

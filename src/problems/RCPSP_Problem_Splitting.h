@@ -51,7 +51,8 @@ public:
                                       ActivitySplittingMode mode,
                                       int    strategy = 4,
                                       double rr       = 0.0,
-                                      bool   rv       = false);
+                                      bool   rv       = false,
+                                      const std::string &costDir = "costs");  // 既定=正本
 
     // evaluate() をオーバーライドして P2/P3 スケジュール生成を実装
     void evaluate(Solution *solution) override;

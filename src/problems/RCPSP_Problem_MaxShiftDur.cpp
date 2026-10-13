@@ -104,8 +104,9 @@ void RCPSP_Problem_MaxShiftDur::setStrategy(int s) {
 //   vars[n..2n-1] の上限を R に上書き（基底が halfT を設定してしまうため）。
 // ============================================================
 RCPSP_Problem_MaxShiftDur::RCPSP_Problem_MaxShiftDur(
-        const std::string &filename, int strategy, double rr, bool rv)
-    : RCPSP_Problem_MaxShift(filename, strategy, rr, rv)
+        const std::string &filename, int strategy, double rr, bool rv,
+        const std::string &costDir)
+    : RCPSP_Problem_MaxShift(filename, strategy, rr, rv, costDir)
 {
     alpha_ = getAlpha();
 
@@ -196,6 +197,7 @@ void RCPSP_Problem_MaxShiftDur::evaluate(Solution *solution) {
     for (int j = 0; j < n; ++j) {
         int    key = vars[n + j];
         double rho = std::max(0, std::min(R, key)) / (double)R;
+        if (rhoPower_ != 1.0) rho = std::pow(rho, rhoPower_);
         double dj  = (double)instance.duration[j];
         double eff = std::max(alpha * dj, beta * (double)T);
         winArr[j]  = (int)std::lround(rho * eff);

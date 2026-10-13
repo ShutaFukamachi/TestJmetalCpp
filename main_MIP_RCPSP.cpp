@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -31,9 +32,29 @@
 #include "problems/RCPSP_MIP_Transform.h"
 #include "problems/RCPSP_MIP_SolverP2Activity.h"
 #include "problems/RCPSP_Conditions.h"
+#include "util/KeepAwake.h"
 
 using namespace std;
 namespace fs = std::filesystem;
+
+// ============================================================
+//  --cost-dir=<dir> （既定 "costs" = 正本、現行動作を変えない）。
+//  正本以外のコスト表を読ませる場合は出力先を results/EXT_COST/ 配下に
+//  切り替える（.miss_memory/031,035 の公式結果誤上書き事故の再発防止）。
+// ============================================================
+static string g_costDir     = "costs";
+static string g_resultsRoot = "results";
+
+static void guardOutputPath(const string &path) {
+    if (g_costDir == "costs") return;
+    if (path.rfind("results/FUN_MIP/", 0) == 0 || path.rfind("results/FUN_ENC/", 0) == 0) {
+        cerr << "[FATAL] --cost-dir=" << g_costDir << " but output path would write into "
+                "the official results/FUN_MIP or results/FUN_ENC tree: " << path << "\n"
+             << "        Refusing to write (see .miss_memory/031,035 - official-result "
+                "overwrite incidents).\n";
+        throw runtime_error("refusing to write non-canonical cost-table results into official results tree");
+    }
+}
 
 // ============================================================
 //  j30 インスタンスリスト（main.cpp と同一）
@@ -105,7 +126,8 @@ static void writeResults(
 {
     // outPrefix = "{instance}_{cond}" なのでインスタンス名を先頭トークンから取得
     string instName = outPrefix.substr(0, outPrefix.find('_', outPrefix.find('_') + 1));
-    const string mipDir = "results/FUN_MIP/" + instName + "/";
+    const string mipDir = g_resultsRoot + "/FUN_MIP/" + instName + "/";
+    guardOutputPath(mipDir);
     fs::create_directories(mipDir);
     const string funPath   = mipDir + "FUN_MIP_"   + outPrefix + ".txt";
     const string schedPath = mipDir + "SCHED_MIP_" + outPrefix + ".txt";
@@ -294,7 +316,8 @@ static void writeResultsSplit(
         const RCPSP_Instance        &orig)
 {
     string instName = outPrefix.substr(0, outPrefix.find('_', outPrefix.find('_') + 1));
-    const string dir = "results/FUN_MIP_" + modeTag + "/" + instName + "/";
+    const string dir = g_resultsRoot + "/FUN_MIP_" + modeTag + "/" + instName + "/";
+    guardOutputPath(dir);
     fs::create_directories(dir);
     const string funPath   = dir + "FUN_MIP_"   + modeTag + "_" + outPrefix + ".txt";
     const string schedPath = dir + "SCHED_MIP_" + modeTag + "_" + outPrefix + ".txt";
@@ -384,7 +407,7 @@ static void runMIPSplit(const string &instanceFile,
          << "  (timeLimit=" << cfg.timeLimit << "s/solve)\n";
     cout << "------------------------------------------------------------\n";
 
-    RCPSP_MIP_Solver solver(instanceFile, rr, rv);
+    RCPSP_MIP_Solver solver(instanceFile, rr, rv, g_costDir);
     RCPSP_Instance orig = snapshotInstance(solver);
     int T_original = solver.getHorizon();
 
@@ -505,7 +528,7 @@ static void runMIP(const string &instanceFile,
          << "  (timeLimit=" << cfg.timeLimit << "s/solve)\n";
     cout << "------------------------------------------------------------\n";
 
-    RCPSP_MIP_Solver solver(instanceFile, rr, rv);
+    RCPSP_MIP_Solver solver(instanceFile, rr, rv, g_costDir);
 
     auto t0     = chrono::steady_clock::now();
     auto front  = solver.solvePareto(cfg);
@@ -575,7 +598,7 @@ static void runInstance(const string &instanceFile,
         const string ctag = toCondTag(c.rr, c.rv);
         RCPSP_Problem::resetGlobalCostSeries();
 
-        RCPSP_MIP_Solver solver(instanceFile, c.rr, c.rv);
+        RCPSP_MIP_Solver solver(instanceFile, c.rr, c.rv, g_costDir);
 
         auto t0    = chrono::steady_clock::now();
         auto front = solver.solvePareto(cfg);
@@ -644,15 +667,28 @@ static bool parseTimeLimit(int argc, char **argv, double &outValue) {
     }
 }
 
-// --split-mode / --time-limit の両方を1パスで取り除く
-// （既存の引数の並び・既定動作は変えない。この2フラグはどの位置にあってもよい）
+// ============================================================
+//  --cost-dir=<dir> の抽出（既定 "costs" = 正本。現行動作を変えない）
+// ============================================================
+static string parseCostDir(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        string a = argv[i];
+        if (a == "--cost-dir" && i + 1 < argc) return string(argv[i + 1]);
+        if (a.rfind("--cost-dir=", 0) == 0) return a.substr(string("--cost-dir=").size());
+    }
+    return "costs";
+}
+
+// --split-mode / --time-limit / --cost-dir の3つを1パスで取り除く
+// （既存の引数の並び・既定動作は変えない。このフラグ群はどの位置にあってもよい）
 static vector<string> stripKnownFlags(int argc, char **argv) {
     vector<string> out;
     for (int i = 0; i < argc; ++i) {
         string a = argv[i];
-        if (a == "--split-mode" || a == "--time-limit") { ++i; continue; }
+        if (a == "--split-mode" || a == "--time-limit" || a == "--cost-dir") { ++i; continue; }
         if (a.rfind("--split-mode=", 0) == 0) continue;
         if (a.rfind("--time-limit=", 0) == 0) continue;
+        if (a.rfind("--cost-dir=", 0) == 0) continue;
         out.push_back(a);
     }
     return out;
@@ -662,6 +698,11 @@ static vector<string> stripKnownFlags(int argc, char **argv) {
 //  main
 // ============================================================
 int main(int argc, char **argv) {
+    // 標準出力を行ごとに書き出す（.miss_memory/042: ファイルへリダイレクトすると
+    // バッファリングでプロセス終了までログが出ず、進捗確認や異常検知ができなかった）。
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    cout << unitbuf;
+    enableKeepAwake();
     try {
         string splitMode = parseSplitMode(argc, argv);
         if (splitMode != "P1" && splitMode != "P2" && splitMode != "P3" && splitMode != "P2-legacy") {
@@ -673,6 +714,10 @@ int main(int argc, char **argv) {
             cerr << "[ERROR] --time-limit must be a positive number of seconds\n";
             return 1;
         }
+        g_costDir     = parseCostDir(argc, argv);
+        g_resultsRoot = (g_costDir == "costs") ? "results" : "results/EXT_COST";
+        cout << "[CONFIG] cost-dir=" << g_costDir << "  results-root=" << g_resultsRoot << "\n";
+
         vector<string> args = stripKnownFlags(argc, argv);
         int argc2 = (int)args.size();
         vector<char*> argv2;
@@ -709,7 +754,7 @@ int main(int argc, char **argv) {
                 runMIPSplit(instanceFile, rr, rv, cfg, splitMode);
             } else {
                 if (argc >= 6) {
-                    RCPSP_MIP_Solver probe(instanceFile, rr, rv);
+                    RCPSP_MIP_Solver probe(instanceFile, rr, rv, g_costDir);
                     vector<int> warm;
                     if (loadWarmStartFromSched(argv[5], probe.getNumJobs(), warm)) {
                         cfg.warmStart = warm;

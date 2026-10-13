@@ -34,3 +34,16 @@ figures/
 .run48_logs/
 __pycache__/
 build_out.txt
+
+# 公開整理: 卒論期の試作・バックアップファイル（手元には残すがGitHub非公開）
+卒論の時のNSGAⅡ
+卒論の時のmain
+卒論時のRCPSPProblemcpp
+卒論時のRCPSPProblemh
+卒論時のRCPSPReqaderh
+shokikai
+tamesu
+メイン一回移す
+NSGA-2main
+AUGMECONの2解
+ゼミ発表原稿_20260910.txt

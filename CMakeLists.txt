@@ -88,6 +88,9 @@ add_executable(D2Repro main_D2_Reproducibility.cpp
 add_executable(D4WindowRank main_D4_WindowRank.cpp
 )
 
+add_executable(CostExtend main_CostExtend.cpp
+)
+
 
 
 target_link_libraries(TestJmetalCpp PRIVATE
@@ -187,6 +190,14 @@ target_link_libraries(D4WindowRank PRIVATE
         $<$<CONFIG:Release>:gurobi_c++md2017>
 )
 
+target_link_libraries(CostExtend PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
 add_executable(NSGAMaxShiftCpp main_NSGAII_RCPSP_MaxShift.cpp
 )
 
@@ -213,6 +224,30 @@ add_executable(RCPSPMIPCpp main_MIP_RCPSP.cpp
 )
 
 target_link_libraries(RCPSPMIPCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+# rho べき乗マッピング実験用（NSGAMaxShiftDurCpp と同じソース。実行中の公式バイナリを上書きしないための別名）
+add_executable(NSGAMaxShiftDurRPCpp main_NSGAII_RCPSP_MaxShiftDur.cpp
+)
+
+target_link_libraries(NSGAMaxShiftDurRPCpp PRIVATE
+        jmetalcpp
+
+        gurobi130
+        $<$<CONFIG:Debug>:gurobi_c++mdd2017>
+        $<$<CONFIG:Release>:gurobi_c++md2017>
+)
+
+# P3（任意中断）の時刻別実行 MIP（拡張コスト表専用の実験ツール、2026-10-01）
+add_executable(P3Slot main_P3Slot.cpp
+)
+
+target_link_libraries(P3Slot PRIVATE
         jmetalcpp
 
         gurobi130

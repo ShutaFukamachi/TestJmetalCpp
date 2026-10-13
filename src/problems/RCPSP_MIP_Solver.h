@@ -72,7 +72,8 @@ public:
 
     explicit RCPSP_MIP_Solver(const std::string &filename,
                                double rr = 0.0,
-                               bool   rv = false);
+                               bool   rv = false,
+                               const std::string &costDir = "costs");
 
     // ---- ユーティリティ ----
     int  getHorizon()                    const;  // Σdurations または capacity_t 長

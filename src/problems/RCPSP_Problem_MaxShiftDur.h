@@ -56,7 +56,8 @@ public:
     explicit RCPSP_Problem_MaxShiftDur(const std::string &filename,
                                         int    strategy = 3,
                                         double rr       = 0.0,
-                                        bool   rv       = false);
+                                        bool   rv       = false,
+                                        const std::string &costDir = "costs");
 
     // ---- 評価（duration-scaled window） ----
     void evaluate(Solution *solution) override;
@@ -85,6 +86,10 @@ public:
     // beta = 0.0 (デフォルト) = 無効（純粋 duration-scaled）
     double getBeta() const   { return beta_; }
     void   setBeta(double b) { beta_ = b; }
+    // 窓幅の非線形マッピング win = round(rho^k * eff)。既定 k=1.0 で従来と完全に同一。
+    // 実需の rho_needed が中央値 0.03 程度に偏っている（.miss_memory/040）ことへの対策の実験用。
+    double getRhoPower() const { return rhoPower_; }
+    void   setRhoPower(double k) { rhoPower_ = k; }
 
     // ログ用エンコーディング名
     std::string encodingName() const override { return "MaxShiftDur"; }
@@ -92,6 +97,7 @@ public:
 private:
     double alpha_ = 1.0;  // strategy-dependent coefficient
     double beta_  = 0.0;  // hybrid window coefficient (0.0 = disabled)
+    double rhoPower_ = 1.0;  // rho の指数（1.0 = 従来）
 };
 
 #endif // RCPSP_PROBLEM_MAXSHIFTDUR_H

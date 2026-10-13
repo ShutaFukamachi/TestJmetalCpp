@@ -304,7 +304,7 @@ static void buildMaxShiftVector(
 //   既存の呼び出し new RCPSP_Problem(file) はそのまま動く
 // ============================================================
 RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
-                              double rr, bool rv)
+                              double rr, bool rv, const std::string &costDir)
         : Problem(), strategy_(strategy), instance(readPSPLIB_SM(filename)) {
 
     // ベース名（拡張子なし）を抽出して保持
@@ -347,11 +347,13 @@ RCPSP_Problem::RCPSP_Problem(const std::string &filename, int strategy,
         if (p != std::string::npos) base = base.substr(p + 1);
         size_t dot = base.find_last_of('.');
         if (dot != std::string::npos) base = base.substr(0, dot);
-        // 正本コスト表はフラット costs/costs_<prefix>.csv に一本化する（読み取り専用）。
+        // 正本コスト表はフラット <costDir>/costs_<prefix>.csv に一本化する（読み取り専用）。
         // （旧: costs/<prefix>/costs_<prefix>.csv のネストは、正本不在時のランダム
         //   生成フォールバックが作った別表で、系列間のコスト不一致＝欠陥2の温床だった）
-        std::filesystem::create_directories("costs");
-        std::string newCsvPath = "costs/costs_" + base + ".csv";
+        // costDir は既定 "costs"（正本）。拡張コスト表など代替ディレクトリを読ませたい
+        // 場合のみ呼び出し元が明示的に指定する（.miss_memory/041 参照）。
+        std::filesystem::create_directories(costDir);
+        std::string newCsvPath = costDir + "/costs_" + base + ".csv";
         std::lock_guard<std::mutex> lk(g_costMutex);
         if (COST_CSV_PATH != newCsvPath) {
             // 別インスタンスに切り替わった → コストテーブルをリセット

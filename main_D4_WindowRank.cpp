@@ -245,14 +245,15 @@ static string toCondTag(double rr, bool rv) {
     return string(buf);
 }
 
-// 正本コスト表 costs/costs_<prefix>.csv のヘッダ（R T）だけを読む（読み取り専用）。
+// 正本コスト表 <costDir>/costs_<prefix>.csv のヘッダ（R T）だけを読む（読み取り専用）。
 // .miss_memory/024: コスト表の horizon（T_cost）がスケジュール horizon（T）より
 // 短い既知の未解決課題があり、t >= T_cost はコスト表末尾の値にクランプされる
 // （RCPSP_Problem.cpp::resourceCost の `if (t >= COST_T) t = COST_T - 1;`）。
 // D4 の rank/cost_diff はこの区間で「本当に同コストだから」ではなく「クランプされて
 // いるから」タイになりうるため、影響範囲を診断的に報告する（CSVスキーマは変更しない）。
-static int readCostTableHorizon(const string &prefix) {
-    ifstream in("costs/costs_" + prefix + ".csv");
+// costDir に拡張コスト表（.miss_memory/041）を指定した場合はクランプが解消される想定。
+static int readCostTableHorizon(const string &prefix, const string &costDir) {
+    ifstream in(costDir + "/costs_" + prefix + ".csv");
     if (!in) return -1;
     int r = 0, t = 0;
     if (!(in >> r >> t)) return -1;
@@ -273,15 +274,18 @@ static double percentile(vector<double> v, double p) {
 //  1インスタンス × 1条件 の処理
 // ============================================================
 static bool processCondition(const string &instanceFile, double rr, bool rv,
-                              int strategy, double beta)
+                              int strategy, double beta,
+                              const string &costDir, const string &mipDir,
+                              const string &outDir)
 {
     const string prefix  = toBaseNoExt(instanceFile);
     const string condTag = toCondTag(rr, rv);
-    const string schedPath = "results/FUN_MIP/" + prefix + "/SCHED_MIP_" + prefix + "_" + condTag + ".txt";
+    const string schedPath = mipDir + "/" + prefix + "/SCHED_MIP_" + prefix + "_" + condTag + ".txt";
 
     cout << "\n------------------------------------------------------------\n";
     cout << "[D4] " << prefix << "  " << condTag
-         << "  strategy=" << strategy << "  beta=" << beta << "\n";
+         << "  strategy=" << strategy << "  beta=" << beta
+         << "  cost-dir=" << costDir << "  mip-dir=" << mipDir << "\n";
     cout << "------------------------------------------------------------\n";
 
     SchedMipData sched;
@@ -300,13 +304,13 @@ static bool processCondition(const string &instanceFile, double rr, bool rv,
 
     // ---- デコーダ本体を .sm から再構築（001の決定論的シードにより
     //      MIP出力と同一の capacity_t が再現される想定。次で検証する） ----
-    RCPSP_Problem_MaxShiftDur prob(instanceFile, strategy, rr, rv);
+    RCPSP_Problem_MaxShiftDur prob(instanceFile, strategy, rr, rv, costDir);
     prob.setBeta(beta);
     const int n = prob.getNumJobs();
     const int T = prob.getHorizon();
     const double alpha = prob.getAlpha();
 
-    const int costT = readCostTableHorizon(prefix);
+    const int costT = readCostTableHorizon(prefix, costDir);
     if (costT > 0 && costT < T) {
         cout << "  [WARN] cost table horizon (" << costT << ") < schedule horizon (" << T
              << ") -- known unresolved issue (.miss_memory/024). Costs for t>=" << costT
@@ -359,8 +363,8 @@ static bool processCondition(const string &instanceFile, double rr, bool rv,
         for (int s : succ[j])
             if (s >= 0 && s < n) preds[s].push_back(j);
 
-    fs::create_directories("results/ANALYSIS_D4");
-    const string csvPath = "results/ANALYSIS_D4/D4_" + prefix + "_" + condTag + ".csv";
+    fs::create_directories(outDir);
+    const string csvPath = outDir + "/D4_" + prefix + "_" + condTag + ".csv";
     ofstream csv(csvPath);
     csv << "instance,rr,rv,front_idx,makespan,cost,job,duration,est,t_mak,s_star,"
            "w_needed,n_feasible_in_span,n_cheaper,n_tie_earlier,rank,"
@@ -484,6 +488,8 @@ int main(int argc, char **argv) {
         double beta = 0.5;
         bool   runAll = false;
         bool   haveRR = false, haveRV = false;
+        string costDir = "costs";
+        string mipDir  = "results/FUN_MIP";
 
         for (int i = 1; i < argc; ++i) {
             string a = argv[i];
@@ -493,20 +499,29 @@ int main(int argc, char **argv) {
             else if (a == "--strategy" && i + 1 < argc) strategy = stoi(argv[++i]);
             else if (a == "--beta" && i + 1 < argc) beta = stod(argv[++i]);
             else if (a == "--all") runAll = true;
+            else if (a == "--cost-dir" && i + 1 < argc) costDir = argv[++i];
+            else if (a.rfind("--cost-dir=", 0) == 0) costDir = a.substr(string("--cost-dir=").size());
+            else if (a == "--mip-dir" && i + 1 < argc) mipDir = argv[++i];
+            else if (a.rfind("--mip-dir=", 0) == 0) mipDir = a.substr(string("--mip-dir=").size());
         }
 
         if (instanceFile.empty()) {
             cerr << "usage: D4WindowRank --instance <file> --rr <r> --rv <0/1> "
-                    "[--strategy 4] [--beta 0.5]\n"
-                    "       D4WindowRank --instance <file> --all [--strategy 4] [--beta 0.5]\n";
+                    "[--strategy 4] [--beta 0.5] [--cost-dir costs] [--mip-dir results/FUN_MIP]\n"
+                    "       D4WindowRank --instance <file> --all [--strategy 4] [--beta 0.5] "
+                    "[--cost-dir costs] [--mip-dir results/FUN_MIP]\n";
             return 1;
         }
+
+        // 正本以外のコスト表を指定した場合は出力先を自動的に results/ANALYSIS_D4_EXT/ へ
+        // 切り替える（既存の results/ANALYSIS_D4/ は変更しない）。
+        const string outDir = (costDir == "costs") ? "results/ANALYSIS_D4" : "results/ANALYSIS_D4_EXT";
 
         if (runAll) {
             const auto &conditions = RCPSP_STANDARD_CONDITIONS();
             int ran = 0, skipped = 0;
             for (const auto &c : conditions) {
-                if (processCondition(instanceFile, c.rr, c.rv, strategy, beta)) ++ran;
+                if (processCondition(instanceFile, c.rr, c.rv, strategy, beta, costDir, mipDir, outDir)) ++ran;
                 else ++skipped;
             }
             cout << "\n[D4 ALL DONE] ran=" << ran << " skipped=" << skipped
@@ -516,7 +531,7 @@ int main(int argc, char **argv) {
                 cerr << "[ERROR] specify both --rr and --rv, or use --all\n";
                 return 1;
             }
-            if (!processCondition(instanceFile, rr, rv, strategy, beta)) {
+            if (!processCondition(instanceFile, rr, rv, strategy, beta, costDir, mipDir, outDir)) {
                 return 1;
             }
         }

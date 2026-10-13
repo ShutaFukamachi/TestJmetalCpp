@@ -13,8 +13,9 @@
 // ============================================================
 RCPSP_MIP_Solver::RCPSP_MIP_Solver(const std::string &filename,
                                      double rr,
-                                     bool   rv)
-    : RCPSP_Problem(filename, /*strategy=*/1, rr, rv)
+                                     bool   rv,
+                                     const std::string &costDir)
+    : RCPSP_Problem(filename, /*strategy=*/1, rr, rv, costDir)
 {}
 
 int RCPSP_MIP_Solver::getHorizon() const {

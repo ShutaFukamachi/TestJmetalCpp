@@ -29,6 +29,8 @@
 // ============================================================
 
 #include <chrono>
+#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -61,9 +63,11 @@
 #include "operators/mutation/MaxShiftMutation.h"
 #include "operators/selection/BinaryTournament2.h"
 #include "util/Ranking.h"
+#include "util/KeepAwake.h"
 #include "problems/MaxShiftSensitivity.h"
 
 using namespace std;
+namespace fs = std::filesystem;
 
 // ============================================================
 //  共通ユーティリティ（両ランナーで使用）
@@ -71,6 +75,41 @@ using namespace std;
 namespace EncUtil {
 
 static std::mutex g_printMutex;
+
+// ============================================================
+//  --cost-dir=<dir> （既定 "costs" = 正本、現行動作を変えない）。
+//  main() で一度だけ設定し、以降は読み取り専用（非同期ラムダからは
+//  値としてキャプチャせず、グローバルを直接参照する＝011のスレッド安全対策と
+//  同じ「一度設定したら不変」の運用に合わせる）。
+//  正本以外のコスト表を読ませる場合、FUN_ENC_*/SCHED_ENC_* の書き込み先を
+//  results/EXT_COST/FUN_ENC/<prefix>/ に切り替える（.miss_memory/031,035 の
+//  公式結果誤上書き事故の再発防止）。
+// ============================================================
+static string g_costDir = "costs";
+
+static void guardOutputPath(const string &path) {
+    if (g_costDir == "costs") return;
+    if (path.rfind("results/FUN_MIP/", 0) == 0 || path.rfind("results/FUN_ENC/", 0) == 0) {
+        cerr << "[FATAL] --cost-dir=" << g_costDir << " but output path would write into "
+                "the official results/FUN_MIP or results/FUN_ENC tree: " << path << "\n"
+             << "        Refusing to write (see .miss_memory/031,035 - official-result "
+                "overwrite incidents).\n";
+        throw runtime_error("refusing to write non-canonical cost-table results into official results tree");
+    }
+    // cwd直下（ディレクトリ区切りなし）に FUN_ENC_*/SCHED_ENC_* を書こうとした場合も拒否する。
+    // 公式スクリプト run_48_comparison.sh はこの命名の cwd ファイルを mv で
+    // results/FUN_ENC/<prefix>/ に移すため、costDir != "costs" のときに cwd へ
+    // 書いてしまうと、後から誤って公式スクリプトの mv 対象になり得る。
+    size_t slash = path.find_last_of("/\\");
+    if (slash == string::npos) {
+        if (path.rfind("FUN_ENC_", 0) == 0 || path.rfind("SCHED_ENC_", 0) == 0) {
+            cerr << "[FATAL] --cost-dir=" << g_costDir << " but attempted to write " << path
+                 << " directly under cwd (would collide with the official mv-based pipeline "
+                    "in tools/run_48_comparison.sh).\n";
+            throw runtime_error("refusing cwd FUN_ENC_/SCHED_ENC_ write under non-canonical cost-dir");
+        }
+    }
+}
 
 inline void syncPrint(const std::string &msg) {
     std::lock_guard<std::mutex> lk(g_printMutex);
@@ -186,12 +225,25 @@ void attachMaxShiftOps(Algorithm *algo, RCPSP_Problem_MaxShift *prob) {
 }
 
 // FUN / SCHED ファイル出力
+// instPrefix : インスタンス名（例 "j309_1"）。costDir が正本以外のとき
+//   results/EXT_COST/FUN_ENC/<instPrefix>/ への出力先切り替えに使う。
 void writeResultFiles(const string &outPrefix,
                       SolutionSet  *pareto,
-                      RCPSP_Problem *prob)
+                      RCPSP_Problem *prob,
+                      const string &instPrefix)
 {
-    const string funPath   = "FUN_ENC_"   + outPrefix + ".txt";
-    const string schedPath = "SCHED_ENC_" + outPrefix + ".txt";
+    string funPath, schedPath;
+    if (g_costDir == "costs") {
+        funPath   = "FUN_ENC_"   + outPrefix + ".txt";
+        schedPath = "SCHED_ENC_" + outPrefix + ".txt";
+    } else {
+        const string dir = "results/EXT_COST/FUN_ENC/" + instPrefix + "/";
+        fs::create_directories(dir);
+        funPath   = dir + "FUN_ENC_"   + outPrefix + ".txt";
+        schedPath = dir + "SCHED_ENC_" + outPrefix + ".txt";
+    }
+    guardOutputPath(funPath);
+    guardOutputPath(schedPath);
 
     ofstream funFile(funPath.c_str());
     ofstream schedFile(schedPath.c_str());
@@ -464,13 +516,13 @@ SolutionSet* EncodingComparisonRunner_P1::runEncoding(int enc) const {
     EncUtil::ProbFactory factory;
     if (enc == 0) {
         factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
-            auto *p = new RCPSP_Problem(instFile, s, rr, rv);
+            auto *p = new RCPSP_Problem(instFile, s, rr, rv, EncUtil::g_costDir);
             p->setMaxEvaluations(evals);
             return {p, nullptr};
         };
     } else {
         factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
-            auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv);
+            auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv, EncUtil::g_costDir);
             p->setMaxEvaluations(evals);
             return {p, p};
         };
@@ -525,10 +577,10 @@ void EncodingComparisonRunner_P1::runAll() const {
             SolutionSet *pareto = runner.runEncoding(enc);
 
             RCPSP_Problem *prob = (enc == 0)
-                ? new RCPSP_Problem(cfg_.instanceFile, 1, c.rr, c.rv)
-                : (RCPSP_Problem*)new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, c.rr, c.rv);
+                ? new RCPSP_Problem(cfg_.instanceFile, 1, c.rr, c.rv, EncUtil::g_costDir)
+                : (RCPSP_Problem*)new RCPSP_Problem_MaxShift(cfg_.instanceFile, 1, c.rr, c.rv, EncUtil::g_costDir);
 
-            EncUtil::writeResultFiles(prefix_ + "_" + ctag + "_" + encTag, pareto, prob);
+            EncUtil::writeResultFiles(prefix_ + "_" + ctag + "_" + encTag, pareto, prob, prefix_);
 
             for (int i = 0; i < pareto->size(); ++i) {
                 minMs[enc]   = std::min(minMs[enc],   pareto->get(i)->getObjective(0));
@@ -630,13 +682,13 @@ SolutionSet* EncodingComparisonRunner_All::runEncoding(
     if (isP1) {
         if (enc == 0) {
             factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
-                auto *p = new RCPSP_Problem(instFile, s, rr, rv);
+                auto *p = new RCPSP_Problem(instFile, s, rr, rv, EncUtil::g_costDir);
                 p->setMaxEvaluations(evals);
                 return {p, nullptr};
             };
         } else {
             factory = [instFile, rr, rv, evals](int s) -> EncUtil::ProbPair {
-                auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv);
+                auto *p = new RCPSP_Problem_MaxShift(instFile, s, rr, rv, EncUtil::g_costDir);
                 p->setMaxEvaluations(evals);
                 return {p, p};
             };
@@ -644,13 +696,13 @@ SolutionSet* EncodingComparisonRunner_All::runEncoding(
     } else {
         if (enc == 0) {
             factory = [instFile, mode, rr, rv, evals](int s) -> EncUtil::ProbPair {
-                auto *p = new RCPSP_Problem_Splitting(instFile, mode, s, rr, rv);
+                auto *p = new RCPSP_Problem_Splitting(instFile, mode, s, rr, rv, EncUtil::g_costDir);
                 p->setMaxEvaluations(evals);
                 return {p, nullptr};
             };
         } else {
             factory = [instFile, mode, rr, rv, evals](int s) -> EncUtil::ProbPair {
-                auto *p = new RCPSP_Problem_Splitting_MaxShift(instFile, mode, s, rr, rv);
+                auto *p = new RCPSP_Problem_Splitting_MaxShift(instFile, mode, s, rr, rv, EncUtil::g_costDir);
                 p->setMaxEvaluations(evals);
                 return {(RCPSP_Problem*)p, p};
             };
@@ -715,23 +767,23 @@ void EncodingComparisonRunner_All::runAll() const {
                 RCPSP_Problem *prob = nullptr;
                 if (m == "P1") {
                     prob = (enc == 0)
-                        ? new RCPSP_Problem(cfg_.instanceFile, 1, c.rr, c.rv)
+                        ? new RCPSP_Problem(cfg_.instanceFile, 1, c.rr, c.rv, EncUtil::g_costDir)
                         : (RCPSP_Problem*)new RCPSP_Problem_MaxShift(
-                                cfg_.instanceFile, 1, c.rr, c.rv);
+                                cfg_.instanceFile, 1, c.rr, c.rv, EncUtil::g_costDir);
                 } else {
                     ActivitySplittingMode mode = (m == "P2")
                         ? ActivitySplittingMode::P2 : ActivitySplittingMode::P3;
                     prob = (enc == 0)
                         ? (RCPSP_Problem*)new RCPSP_Problem_Splitting(
-                                cfg_.instanceFile, mode, 1, c.rr, c.rv)
+                                cfg_.instanceFile, mode, 1, c.rr, c.rv, EncUtil::g_costDir)
                         : (RCPSP_Problem*)new RCPSP_Problem_Splitting_MaxShift(
-                                cfg_.instanceFile, mode, 1, c.rr, c.rv);
+                                cfg_.instanceFile, mode, 1, c.rr, c.rv, EncUtil::g_costDir);
                 }
 
                 // ファイル名: FUN_ENC_{prefix}_{cond}_{mode}_{enc}.txt
                 const string outPrefix =
                         prefix_ + "_" + ctag + "_" + m + "_" + encTag;
-                EncUtil::writeResultFiles(outPrefix, pareto, prob);
+                EncUtil::writeResultFiles(outPrefix, pareto, prob, prefix_);
 
                 // サマリ集計
                 const string key = m + "_" + encTag;
@@ -768,6 +820,11 @@ void EncodingComparisonRunner_All::runAll() const {
 //  main
 // ============================================================
 int main(int argc, char **argv) {
+    // 標準出力を行ごとに書き出す（.miss_memory/042: ファイルへリダイレクトすると
+    // バッファリングでプロセス終了までログが出ず、進捗確認や異常検知ができなかった）。
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    cout << unitbuf;
+    enableKeepAwake();
     try {
         const string defaultInstance = "j30.sm/j301_1.sm";
 
@@ -788,11 +845,21 @@ int main(int argc, char **argv) {
                 a2seed = stoi(argv[++i]);
             } else if (a == "--evals" && i + 1 < argc) {
                 evalsOverride = stoi(argv[++i]);
+            } else if (a == "--cost-dir" && i + 1 < argc) {
+                EncUtil::g_costDir = argv[++i];
+            } else if (a.rfind("--cost-dir=", 0) == 0) {
+                EncUtil::g_costDir = a.substr(string("--cost-dir=").size());
             } else if (instanceFile.empty()) {
                 instanceFile = a;
             }
         }
         if (instanceFile.empty()) instanceFile = defaultInstance;
+
+        // 2026-10-02: RCPSP_Problem_Splitting/_MaxShift も costDir に対応したので、
+        // --cost-dir 指定時の「--p1-only 必須」の制限は撤廃した（.miss_memory/043 参照）。
+        // 既定 "costs" のときは既存の標準出力を1行も変えないため、非既定時のみ出す。
+        if (EncUtil::g_costDir != "costs")
+            cout << "[CONFIG] cost-dir=" << EncUtil::g_costDir << "\n";
 
         // 共通設定
         EncodingComparisonRunner_All::Config cfg;
@@ -809,7 +876,7 @@ int main(int argc, char **argv) {
 
         // ---- 感度分析（MaxShift 上限 T/4 の妥当性検証） ----
         {
-            MaxShiftSensitivityAnalyzer sa(instanceFile, 0.0, false);
+            MaxShiftSensitivityAnalyzer sa(instanceFile, 0.0, false, EncUtil::g_costDir);
             sa.runAndSave("maxshift_sensitivity_RR000_RV0.csv", 40);
         }
 

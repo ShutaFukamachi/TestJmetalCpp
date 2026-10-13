@@ -34,7 +34,8 @@ public:
             ActivitySplittingMode mode,
             int                   strategy = 3,
             double                rr       = 0.0,
-            bool                  rv       = false);
+            bool                  rv       = false,
+            const std::string    &costDir  = "costs");  // 既定=正本。拡張コスト表のときだけ指定
 
     void evaluate(Solution *solution) override;
 

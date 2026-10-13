@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -54,6 +55,7 @@ namespace fs = std::filesystem;
 #include "problems/RCPSP_Problem_Splitting_MaxShiftDur.h"
 #include "problems/RCPSP_Conditions.h"
 #include "util/Ranking.h"
+#include "util/KeepAwake.h"
 
 using namespace std;
 
@@ -85,6 +87,32 @@ static void syncPrint(const string &msg) {
     cout << msg;
 }
 
+// ============================================================
+//  --cost-dir=<dir> （既定 "costs" = 正本、現行動作を変えない）。
+//  main() で一度だけ設定し以降は読み取り専用（非同期ラムダはグローバルを
+//  直接参照する。値としてキャプチャせず読み取り専用グローバル参照にするのは
+//  .miss_memory/011 のスレッド安全対策の運用に合わせるため）。
+//  正本以外のコスト表を読ませる場合、出力先を results/EXT_COST/FUN_ENC/<prefix>/
+//  に切り替える（.miss_memory/031,035 の公式結果誤上書き事故の再発防止）。
+// ============================================================
+static string g_costDir = "costs";
+// --rho-power=k: 窓幅 win=round(rho^k*eff)。既定1.0=従来。実験時は必ず --tag と併用する。
+static double g_rhoPower = 1.0;
+// --seed-dir=<dir>: --a2seed で読む作業リストのフォルダ（既定 results/FUN_A2 = 従来どおり）。
+// 優先規則などで作った別の作業リスト集を試すときに指定する（.miss_memory/043）。
+static string g_seedDir = "results/FUN_A2";
+
+static void guardOutputPath(const string &path) {
+    if (g_costDir == "costs") return;
+    if (path.rfind("results/FUN_MIP/", 0) == 0 || path.rfind("results/FUN_ENC/", 0) == 0) {
+        cerr << "[FATAL] --cost-dir=" << g_costDir << " but output path would write into "
+                "the official results/FUN_MIP or results/FUN_ENC tree: " << path << "\n"
+             << "        Refusing to write (see .miss_memory/031,035 - official-result "
+                "overwrite incidents).\n";
+        throw runtime_error("refusing to write non-canonical cost-table results into official results tree");
+    }
+}
+
 static string toCondTag(double rr, bool rv) {
     int rrInt = static_cast<int>(round(rr * 100));
     char buf[32];
@@ -109,7 +137,7 @@ static string toBaseNoExt(const string &path) {
 // ============================================================
 static vector<vector<int>> loadA2Perms(const string &prefix, const string &ctag, int count) {
     vector<vector<int>> perms;
-    const string path = "results/FUN_A2/" + prefix + "/PERM_A2_" + prefix + "_" + ctag + ".txt";
+    const string path = g_seedDir + "/" + prefix + "/PERM_A2_" + prefix + "_" + ctag + ".txt";
     ifstream f(path.c_str());
     if (!f) {
         syncPrint("  [A2seed] WARNING: perm pool not found: " + path + "\n");
@@ -193,10 +221,13 @@ static void writeResultFiles(const string &outPrefix,
                               SolutionSet  *pareto,
                               RCPSP_Problem *prob)
 {
-    const string encDir = "results/FUN_ENC/" + prob->getInstancePrefix() + "/";
-    fs::create_directories(encDir);
+    const string resultsRoot = (g_costDir == "costs") ? "results" : "results/EXT_COST";
+    const string encDir = resultsRoot + "/FUN_ENC/" + prob->getInstancePrefix() + "/";
     const string funPath   = encDir + "FUN_ENC_"   + outPrefix + ".txt";
     const string schedPath = encDir + "SCHED_ENC_" + outPrefix + ".txt";
+    guardOutputPath(funPath);
+    guardOutputPath(schedPath);
+    fs::create_directories(encDir);
 
     ofstream funFile(funPath.c_str());
     ofstream schedFile(schedPath.c_str());
@@ -289,8 +320,8 @@ static SolutionSet* runStrategiesP1(
              populationSize, evalsPerStrategy, beta, a1PrioritySeed, a2Perms]()
             -> StratResult
         {
-            auto *prob = new RCPSP_Problem_MaxShiftDur(instanceFile, s, rr, rv);
-            prob->setBeta(beta);
+            auto *prob = new RCPSP_Problem_MaxShiftDur(instanceFile, s, rr, rv, g_costDir);
+            prob->setBeta(beta); prob->setRhoPower(g_rhoPower);
             prob->setMaxEvaluations(evalsPerStrategy);
             prob->resetEvalCounter();
 
@@ -391,8 +422,8 @@ static SolutionSet* runStrategiesSplit(
             -> StratResult
         {
             auto *prob = new RCPSP_Problem_Splitting_MaxShiftDur(
-                    instanceFile, mode, s, rr, rv);
-            prob->setBeta(beta);
+                    instanceFile, mode, s, rr, rv, g_costDir);
+            prob->setBeta(beta); prob->setRhoPower(g_rhoPower);
             prob->setMaxEvaluations(evalsPerStrategy);
             prob->resetEvalCounter();
 
@@ -511,8 +542,8 @@ static void runInstance(const string &instanceFile,
                     populationSize, evalsPerStrategy, numStrategies, beta,
                     a1PrioritySeed, a2SeedCount, prefix, ctag);
 
-            RCPSP_Problem_MaxShiftDur probOut(instanceFile, 1, c.rr, c.rv);
-            probOut.setBeta(beta);
+            RCPSP_Problem_MaxShiftDur probOut(instanceFile, 1, c.rr, c.rv, g_costDir);
+            probOut.setBeta(beta); probOut.setRhoPower(g_rhoPower);
             // --tag が明示されていればそれを最優先で使う（ノイズ床計測のための
             // beta=0.5 再実行など、beta値だけではファイル名が公式結果と衝突する
             // ケースを確実に回避するため）。--tag 未指定かつ beta!=0.5 のときは
@@ -545,8 +576,8 @@ static void runInstance(const string &instanceFile,
                     populationSize, evalsPerStrategy, numStrategies, beta);
 
             RCPSP_Problem_Splitting_MaxShiftDur probOut(
-                    instanceFile, sm.mode, 1, c.rr, c.rv);
-            probOut.setBeta(beta);
+                    instanceFile, sm.mode, 1, c.rr, c.rv, g_costDir);
+            probOut.setBeta(beta); probOut.setRhoPower(g_rhoPower);
             // 出力ファイル名: FUN_ENC_{prefix}_{cond}_{P2|P3}_MaxShiftDur.txt
             string betaTagP23;
             if (!runTag.empty()) betaTagP23 = "_" + runTag;
@@ -578,8 +609,8 @@ static void runInstance(const string &instanceFile,
 static void verifyDegenerate(const string &instanceFile) {
     cout << "\n[Degenerate Check] alpha=0 (S1) == ESS\n";
 
-    RCPSP_Problem probBase(instanceFile);
-    RCPSP_Problem_MaxShiftDur probDur(instanceFile, 1);
+    RCPSP_Problem probBase(instanceFile, 4, 0.0, false, g_costDir);
+    RCPSP_Problem_MaxShiftDur probDur(instanceFile, 1, 0.0, false, g_costDir);
 
     Solution *solBase = probBase.createRandomTopoSolution();
     probBase.setOutputMaxShift(0);
@@ -612,6 +643,11 @@ static void verifyDegenerate(const string &instanceFile) {
 //  main
 // ============================================================
 int main(int argc, char **argv) {
+    // 標準出力を行ごとに書き出す（.miss_memory/042: ファイルへリダイレクトすると
+    // バッファリングでプロセス終了までログが出ず、進捗確認や異常検知ができなかった）。
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    cout << unitbuf;
+    enableKeepAwake();
     try {
         // ---- 実行パラメータ（main.cpp と同一）----
         const int    populationSize   = 100;
@@ -639,14 +675,28 @@ int main(int argc, char **argv) {
                 a2SeedCount = stoi(argv[++i]);
             } else if (a == "--evals" && i + 1 < argc) {
                 evalsPerStrategy = stoi(argv[++i]);
+            } else if (a.rfind("--seed-dir=", 0) == 0) {
+                g_seedDir = a.substr(string("--seed-dir=").size());
+            } else if (a == "--rho-power" && i + 1 < argc) {
+                g_rhoPower = stod(argv[++i]);
             } else if (a == "--beta" && i + 1 < argc) {
                 beta = stod(argv[++i]);
             } else if (a == "--tag" && i + 1 < argc) {
                 runTag = argv[++i];
+            } else if (a == "--cost-dir" && i + 1 < argc) {
+                g_costDir = argv[++i];
+            } else if (a.rfind("--cost-dir=", 0) == 0) {
+                g_costDir = a.substr(string("--cost-dir=").size());
             } else if (instanceFile.empty()) {
                 instanceFile = a;
             }
         }
+
+        // 2026-10-01: RCPSP_Problem_Splitting_MaxShiftDur も costDir に対応したので、
+        // --cost-dir 指定時の「--p1-only 必須」の制限は撤廃した（.miss_memory/043 参照）。
+        // 既定 "costs" のときは既存の標準出力を1行も変えないため、非既定時のみ出す。
+        if (g_costDir != "costs")
+            cout << "[CONFIG] cost-dir=" << g_costDir << "\n";
 
         if (!instanceFile.empty()) {
             // 単一インスタンス実行

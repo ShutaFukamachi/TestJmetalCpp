@@ -47,8 +47,9 @@ void RCPSP_Problem_MaxShift::setStrategy(int s) {
 //  コンストラクタ
 // ============================================================
 RCPSP_Problem_MaxShift::RCPSP_Problem_MaxShift(
-        const std::string &filename, int strategy, double rr, bool rv)
-    : RCPSP_Problem(filename, strategy, rr, rv)
+        const std::string &filename, int strategy, double rr, bool rv,
+        const std::string &costDir)
+    : RCPSP_Problem(filename, strategy, rr, rv, costDir)
 {
     int n     = getNumJobs();
     int halfT = getEffectiveHalfT();  // strategy 依存の上限
