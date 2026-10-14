@@ -32,6 +32,8 @@ figures/
 # ログ・キャッシュ
 .mip_logs/
 .run48_logs/
+.run48_ext_logs/
+.run_ext_1001_logs/
 __pycache__/
 build_out.txt
 
@@ -47,3 +49,5 @@ tamesu
 NSGA-2main
 AUGMECONの2解
 ゼミ発表原稿_20260910.txt
+ゼミ発表原稿_20261001.txt
+ゼミ資料ガイド_20261001.txt
