@@ -171,6 +171,9 @@ void RCPSP_Problem_Splitting_MaxShiftDur::evaluate(Solution *solution) {
     // ダミー端点は常に 0
     if (n > 0) winArr[0]     = 0;
     if (n > 1) winArr[n - 1] = 0;
+    // 目標工期（deadlineMode_ のとき、2026-10-28）: 開始の右端を D − tail_j、P3 の窓の終わりを D − tail_j + d_j で打ち切る
+    const int deadline = deadlineFromVars(vars, T);
+    const bool useDl = deadlineMode_ && (int)tail_.size() == n;
 
     // ---- 4. 先行リスト構築 ----
     std::vector<std::vector<int>> preds(n);
@@ -222,6 +225,7 @@ void RCPSP_Problem_Splitting_MaxShiftDur::evaluate(Solution *solution) {
             } else {
                 // コスト優先: [EST, EST+win_j] で最安 S_j を探索
                 int    latest   = std::min(T - d, est + winArr[j]);
+                if (useDl) latest = std::max(est, std::min(latest, deadline - tail_[j]));
                 double bestCost = std::numeric_limits<double>::infinity();
                 int    bestSj   = est;
 
@@ -293,6 +297,7 @@ void RCPSP_Problem_Splitting_MaxShiftDur::evaluate(Solution *solution) {
             } else {
                 // コスト優先 P3: [EST, EST+win_j+d] から安い d スロットを選択
                 int windowEnd = std::min(T - 1, est + winArr[j] + d);
+                if (useDl) windowEnd = std::max(est + d - 1, std::min(windowEnd, deadline - tail_[j] + d - 1));
 
                 std::vector<std::pair<double, int>> candidates;
                 candidates.reserve(windowEnd - est + 1);

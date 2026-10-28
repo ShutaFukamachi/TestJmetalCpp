@@ -614,3 +614,116 @@ Solution* RCPSP_Problem_MaxShift::createPriorityRuleSolution(int rule) {
     }
     return sol;
 }
+// ============================================================
+//  sampleBiasedPriorityList（2026-10-14 ゼミ指摘: 優先規則＋ランダム性）
+//   重み (優先度 - eligible 内の最小優先度 + 1)^alpha の偏りランダム生成。
+//   alpha=0 なら一様ランダム（＝createRandomTopoSolution と同じ分布）、
+//   alpha が大きいほど決定的な優先規則（createPriorityRuleSolution）に近づく。
+// ============================================================
+std::vector<int> RCPSP_Problem_MaxShift::sampleBiasedPriorityList(
+        int rule, double alpha, std::mt19937 &rng,
+        const std::vector<int> *base, int keep) {
+    const int n = getNumJobs();
+    const auto &succ = instance.successors;
+    const auto &dur  = instance.duration;
+
+    if (prioTable_.empty()) {
+        predsCache_.assign(n, {});
+        for (int j = 0; j < n; ++j)
+            for (int s : succ[j])
+                if (s >= 0 && s < n) predsCache_[s].push_back(j);
+        // PSPLIB は番号順がトポロジカル順だが、念のため Kahn で順序を作る
+        std::vector<int> deg(n, 0), topo;
+        for (int j = 0; j < n; ++j) deg[j] = (int)predsCache_[j].size();
+        std::vector<int> st;
+        for (int j = 0; j < n; ++j) if (deg[j] == 0) st.push_back(j);
+        while (!st.empty()) {
+            int j = st.back(); st.pop_back(); topo.push_back(j);
+            for (int s : succ[j]) if (s >= 0 && s < n && --deg[s] == 0) st.push_back(s);
+        }
+        std::vector<int> ES(n, 0), EF(n, 0);
+        for (int j : topo) {
+            int es = 0;
+            for (int p : predsCache_[j]) es = std::max(es, EF[p]);
+            ES[j] = es; EF[j] = es + dur[j];
+        }
+        int CP = 0;
+        for (int j = 0; j < n; ++j) CP = std::max(CP, EF[j]);
+        std::vector<int> LF(n, CP);
+        for (auto it = topo.rbegin(); it != topo.rend(); ++it) {
+            int j = *it, lf = CP;
+            for (int s : succ[j]) if (s >= 0 && s < n) lf = std::min(lf, LF[s] - dur[s]);
+            LF[j] = lf;
+        }
+        prioTable_.assign(4, std::vector<double>(n, 0.0));
+        for (int j = 0; j < n; ++j) {
+            prioTable_[0][j] = -(double)LF[j];                 // LFT
+            prioTable_[1][j] = -(double)(LF[j] - dur[j]);      // LST
+            double grpw = dur[j];
+            for (int s : succ[j]) if (s >= 0 && s < n) grpw += dur[s];
+            prioTable_[3][j] = grpw;                           // GRPW
+        }
+        for (int j = 0; j < n; ++j) {                          // MTS
+            std::vector<char> seen(n, 0);
+            std::vector<int> stk = {j};
+            int cnt = 0;
+            while (!stk.empty()) {
+                int u = stk.back(); stk.pop_back();
+                for (int s : succ[u]) if (s >= 0 && s < n && !seen[s]) {
+                    seen[s] = 1; ++cnt; stk.push_back(s);
+                }
+            }
+            prioTable_[2][j] = cnt;
+        }
+    }
+
+    if (rule < 0 || rule > 3) {
+        std::uniform_int_distribution<int> rd(0, 3);
+        rule = rd(rng);
+    }
+    const std::vector<double> &pr = prioTable_[rule];
+
+    std::vector<int> perm;
+    perm.reserve(n);
+    std::vector<char> done(n, 0);
+    if (base && keep > 0) {
+        keep = std::min(keep, (int)base->size());
+        for (int i = 0; i < keep; ++i) { perm.push_back((*base)[i]); done[(*base)[i]] = 1; }
+    }
+    std::vector<int> deg(n, 0);
+    for (int j = 0; j < n; ++j)
+        for (int p : predsCache_[j]) if (!done[p]) ++deg[j];
+    std::vector<int> avail;
+    for (int j = 0; j < n; ++j) if (!done[j] && deg[j] == 0) avail.push_back(j);
+
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    std::vector<double> w;
+    while (!avail.empty()) {
+        double lo = pr[avail[0]];
+        for (int j : avail) lo = std::min(lo, pr[j]);
+        w.assign(avail.size(), 0.0);
+        double sum = 0.0;
+        for (size_t k = 0; k < avail.size(); ++k) {
+            w[k] = std::pow(pr[avail[k]] - lo + 1.0, alpha);
+            sum += w[k];
+        }
+        double r = u01(rng) * sum;
+        size_t pick = avail.size() - 1;
+        for (size_t k = 0; k < avail.size(); ++k) {
+            r -= w[k];
+            if (r < 0) { pick = k; break; }
+        }
+        int job = avail[pick];
+        avail[pick] = avail.back();
+        avail.pop_back();
+        perm.push_back(job);
+        done[job] = 1;
+        for (int s : succ[job])
+            if (s >= 0 && s < n && --deg[s] == 0) avail.push_back(s);
+    }
+    if ((int)perm.size() != n) {   // 先行関係が壊れた base を渡されたとき（通常起きない）
+        if (base) return *base;
+        perm.resize(n); std::iota(perm.begin(), perm.end(), 0);
+    }
+    return perm;
+}

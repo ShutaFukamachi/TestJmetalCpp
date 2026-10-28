@@ -101,6 +101,52 @@ static double g_rhoPower = 1.0;
 // --seed-dir=<dir>: --a2seed で読む作業リストのフォルダ（既定 results/FUN_A2 = 従来どおり）。
 // 優先規則などで作った別の作業リスト集を試すときに指定する（.miss_memory/043）。
 static string g_seedDir = "results/FUN_A2";
+// 2026-10-14 ゼミ指摘（初期解と探索）。既定はすべて OFF = 従来と同一動作。
+//   --pr-init f : ランダム初期解の枠のうち割合 f を「優先規則＋ランダム性」の作業リストにする
+//   --pr-alpha a: その偏りの強さ（既定 3）
+//   --regen p   : 子ごとに確率 p で作業リストの後半を優先規則＋ランダム性で作り直す
+//   --trace     : 初期集団と世代ごとの要約を results/EXT_COST/TRACE/<prefix>/ に書く（--tag 必須）
+static double g_prInit  = 0.0;
+static double g_prAlpha = 3.0;
+static double g_regen   = 0.0;
+static bool   g_trace   = false;
+//   --island k  : 工期島（窓幅0・メイクスパンだけで進化する作業リストの小集団）の個体数。0=OFF
+static int    g_island  = 0;
+//   --island-patience g : 工期島が g 世代改善しなければ止めて予算を NSGA に返す（0=止めない）
+//   --island-kids m     : 工期島が1世代に作る子の数（既定20）
+static int    g_islandPatience = 0;
+static int    g_islandKids     = 20;
+//   --block-win p : 子ごとに確率 p で、作業リストで連続する数作業の窓幅を一緒に動かす（0=OFF）
+static double g_blockWin = 0.0;
+// 2026-10-21 ゼミ指摘（工期島の効き目を1集団で再現できるか）:
+//   --ms-sel p --ms-sel-top q : 確率 p で、メイクスパン上位 q の中からメイクスパンで親を選ぶ
+//   --cost-sel p --cost-sel-top q : 同じことをコストで
+//   --zero-win z              : 子ごとに確率 z で窓幅をすべて0にする
+//   --trace-children          : trace に親と子の内訳を書く（診断専用、評価が増える）
+static double g_msSel = 0.0, g_msSelTop = 0.1, g_costSel = 0.0, g_costSelTop = 0.1, g_zeroWin = 0.0;
+static int    g_traceChildren = 0;
+//   --ms-mate p --ms-mate-patience g : 1集団の中の工期島（両親をメイクスパン上位から選び、子は窓幅0。g 世代停滞で停止）
+static double g_msMate = 0.0; static int g_msMatePat = 0;
+//   --ms-mate-filter : 工期側の組の子は集団の最良メイクスパンより短いときだけ受け入れる
+static int g_msMateFilter = 0;
+//   --ms-mate-stall-child : 停止の判定を「工期側の組の子（窓幅0）の最良」で行う（工期島と同じ止め方）
+static int g_msMateStallChild = 0;
+//   --time-block-win p : 開始時刻が近い作業のまとまりの窓幅を一緒に動かす（ブロック窓変異の時間版）
+static double g_timeBlockWin = 0.0;
+//   --deadline-gene      : 目標工期の遺伝子（vars[n+0]）で窓の右端を LST_j(D) に打ち切る（P1 のみ、2026-10-24）
+//   --deadline-mut p     : 子ごとの確率 p で目標工期の遺伝子を動かす
+static bool g_deadlineGene = false; static double g_deadlineMut = 0.0;
+//   --deadline-only      : 作業ごとの窓幅の遺伝子を使わず、目標工期だけで窓を決める（探索的）
+static bool g_deadlineOnly = false;
+//   --deadline-cal       : 最遅開始を容量の暦（休暇日など）も考えて逆算する
+static bool g_deadlineCal = false;
+//   --lambda-gene / --lambda-mut p : λ 遺伝子（配置を「コスト + λ×遅らせ」の最小で選ぶ、2026-10-28）
+static bool g_lambdaGene = false; static double g_lambdaMut = 0.0, g_lambdaKappa = 0.2;
+//   --cost-island k / --cost-island-kids m / --cost-island-patience g : コスト島（工期島と対称）
+static int g_costIsland = 0, g_costIslandKids = 20, g_costIslandPatience = 30;
+//   --pop N : 集団サイズ（既定 100）
+static int g_pop = 100;
+static string g_runTag;
 
 static void guardOutputPath(const string &path) {
     if (g_costDir == "costs") return;
@@ -317,11 +363,15 @@ static SolutionSet* runStrategiesP1(
     for (int s = 1; s <= numStrategies; ++s) {
         futures.push_back(async(launch::async,
             [instanceFile, rr, rv, s, numStrategies,
-             populationSize, evalsPerStrategy, beta, a1PrioritySeed, a2Perms]()
+             populationSize, evalsPerStrategy, beta, a1PrioritySeed, a2Perms, prefix, ctag]()
             -> StratResult
         {
             auto *prob = new RCPSP_Problem_MaxShiftDur(instanceFile, s, rr, rv, g_costDir);
             prob->setBeta(beta); prob->setRhoPower(g_rhoPower);
+            if (g_deadlineGene) prob->setDeadlineGene(true);
+            if (g_deadlineOnly) prob->setDeadlineOnly(true);
+            if (g_deadlineCal) prob->setDeadlineCalendar(true);
+            if (g_lambdaGene) prob->setLambdaGene(true, g_lambdaKappa);
             prob->setMaxEvaluations(evalsPerStrategy);
             prob->resetEvalCounter();
 
@@ -337,6 +387,52 @@ static SolutionSet* runStrategiesP1(
             algo->setInputParameter("maxEvaluations", &maxEv);
             algo->setInputParameter("useLocalSearch",  &lsFlag);
             algo->setInputParameter("a1PrioritySeed",  &a1Flag);
+            double prInit = g_prInit, prAlpha = g_prAlpha, regen = g_regen;
+            algo->setInputParameter("prInitFrac", &prInit);
+            algo->setInputParameter("prAlpha",    &prAlpha);
+            algo->setInputParameter("regenProb",  &regen);
+            int island = g_island;
+            algo->setInputParameter("msIsland",   &island);
+            int islandPat = g_islandPatience, islandKids = g_islandKids;
+            algo->setInputParameter("msIslandPatience", &islandPat);
+            algo->setInputParameter("msIslandKids",     &islandKids);
+            double blockWin = g_blockWin;
+            algo->setInputParameter("blockWinProb",     &blockWin);
+            double msSel = g_msSel, msSelTop = g_msSelTop, costSel = g_costSel, costSelTop = g_costSelTop, zeroWin = g_zeroWin;
+            int traceCh = g_traceChildren;
+            algo->setInputParameter("msSelProb",   &msSel);
+            algo->setInputParameter("msSelTop",    &msSelTop);
+            algo->setInputParameter("costSelProb", &costSel);
+            algo->setInputParameter("costSelTop",  &costSelTop);
+            algo->setInputParameter("zeroWinProb", &zeroWin);
+            algo->setInputParameter("traceChildren", &traceCh);
+            double msMate = g_msMate; int msMatePat = g_msMatePat;
+            algo->setInputParameter("msMateProb", &msMate);
+            algo->setInputParameter("msMatePatience", &msMatePat);
+            int msMateFilter = g_msMateFilter;
+            algo->setInputParameter("msMateFilter", &msMateFilter);
+            int msMateStallChild = g_msMateStallChild;
+            algo->setInputParameter("msMateStallChild", &msMateStallChild);
+            double timeBlockWin = g_timeBlockWin;
+            algo->setInputParameter("timeBlockWinProb", &timeBlockWin);
+            double deadlineMut = g_deadlineMut;
+            algo->setInputParameter("deadlineMutProb", &deadlineMut);
+            int deadlineOnly = g_deadlineOnly ? 1 : 0;
+            algo->setInputParameter("deadlineOnly", &deadlineOnly);
+            double lambdaMut = g_lambdaMut;
+            algo->setInputParameter("lambdaMutProb", &lambdaMut);
+            int cIsl = g_costIsland, cIslKids = g_costIslandKids, cIslPat = g_costIslandPatience;
+            algo->setInputParameter("costIsland", &cIsl);
+            algo->setInputParameter("costIslandKids", &cIslKids);
+            algo->setInputParameter("costIslandPatience", &cIslPat);
+            string tracePath;
+            if (g_trace) {
+                const string dir = "results/EXT_COST/TRACE/" + prefix + "/";
+                fs::create_directories(dir);
+                tracePath = dir + "TRACE_" + prefix + "_" + ctag + "_S" + to_string(s)
+                          + (g_runTag.empty() ? "" : "_" + g_runTag) + ".csv";
+                algo->setInputParameter("traceFile", &tracePath);
+            }
 
             SolutionSet *a2SeedSet = nullptr;
             if (!a2Perms.empty()) {
@@ -352,6 +448,9 @@ static SolutionSet* runStrategiesP1(
 
             SolutionSet *pop = algo->execute();
             delete a2SeedSet;
+            if (g_deadlineGene)
+                syncPrint("[DLSTAT] " + ctag + " S" + to_string(s) + " win=" + to_string(prob->statWin_) + " clamp=" + to_string(prob->statClamp_)
+                          + " cut=" + to_string(prob->statCut_) + "\n");
 
             SolutionSet *result = new SolutionSet(populationSize * 4);
             {
@@ -424,6 +523,7 @@ static SolutionSet* runStrategiesSplit(
             auto *prob = new RCPSP_Problem_Splitting_MaxShiftDur(
                     instanceFile, mode, s, rr, rv, g_costDir);
             prob->setBeta(beta); prob->setRhoPower(g_rhoPower);
+            if (g_deadlineGene) prob->setDeadlineGene(true);
             prob->setMaxEvaluations(evalsPerStrategy);
             prob->resetEvalCounter();
 
@@ -437,6 +537,27 @@ static SolutionSet* runStrategiesSplit(
             algo->setInputParameter("populationSize", &popSz);
             algo->setInputParameter("maxEvaluations", &maxEv);
             algo->setInputParameter("useLocalSearch",  &lsFlag);
+            double prInit = g_prInit, prAlpha = g_prAlpha, regen = g_regen;
+            algo->setInputParameter("prInitFrac", &prInit);
+            algo->setInputParameter("prAlpha",    &prAlpha);
+            algo->setInputParameter("regenProb",  &regen);
+            int island = g_island;
+            algo->setInputParameter("msIsland",   &island);
+            int islandPat = g_islandPatience, islandKids = g_islandKids;
+            algo->setInputParameter("msIslandPatience", &islandPat);
+            algo->setInputParameter("msIslandKids",     &islandKids);
+            double blockWin = g_blockWin;
+            algo->setInputParameter("blockWinProb",     &blockWin);
+            double timeBlockWin = g_timeBlockWin;
+            algo->setInputParameter("timeBlockWinProb", &timeBlockWin);
+            double deadlineMut = g_deadlineMut;
+            algo->setInputParameter("deadlineMutProb", &deadlineMut);
+            double lambdaMut = g_lambdaMut;
+            algo->setInputParameter("lambdaMutProb", &lambdaMut);
+            int cIsl = g_costIsland, cIslKids = g_costIslandKids, cIslPat = g_costIslandPatience;
+            algo->setInputParameter("costIsland", &cIsl);
+            algo->setInputParameter("costIslandKids", &cIslKids);
+            algo->setInputParameter("costIslandPatience", &cIslPat);
 
             attachMaxShiftDurOps(algo, prob);
 
@@ -544,6 +665,10 @@ static void runInstance(const string &instanceFile,
 
             RCPSP_Problem_MaxShiftDur probOut(instanceFile, 1, c.rr, c.rv, g_costDir);
             probOut.setBeta(beta); probOut.setRhoPower(g_rhoPower);
+            if (g_deadlineGene) probOut.setDeadlineGene(true);
+            if (g_deadlineOnly) probOut.setDeadlineOnly(true);
+            if (g_deadlineCal) probOut.setDeadlineCalendar(true);
+            if (g_lambdaGene) probOut.setLambdaGene(true, g_lambdaKappa);
             // --tag が明示されていればそれを最優先で使う（ノイズ床計測のための
             // beta=0.5 再実行など、beta値だけではファイル名が公式結果と衝突する
             // ケースを確実に回避するため）。--tag 未指定かつ beta!=0.5 のときは
@@ -578,6 +703,7 @@ static void runInstance(const string &instanceFile,
             RCPSP_Problem_Splitting_MaxShiftDur probOut(
                     instanceFile, sm.mode, 1, c.rr, c.rv, g_costDir);
             probOut.setBeta(beta); probOut.setRhoPower(g_rhoPower);
+            if (g_deadlineGene) probOut.setDeadlineGene(true);
             // 出力ファイル名: FUN_ENC_{prefix}_{cond}_{P2|P3}_MaxShiftDur.txt
             string betaTagP23;
             if (!runTag.empty()) betaTagP23 = "_" + runTag;
@@ -650,7 +776,7 @@ int main(int argc, char **argv) {
     enableKeepAwake();
     try {
         // ---- 実行パラメータ（main.cpp と同一）----
-        const int    populationSize   = 100;
+        int          populationSize   = 100;     // --pop で変更（引数を読んだ後に g_pop を入れる、2026-10-28）
         int          evalsPerStrategy = 50000;
         const int    numStrategies    = 4;
         // beta=0.5: win_j = round(rho * max(alpha*d_j, 0.5*T))
@@ -683,6 +809,67 @@ int main(int argc, char **argv) {
                 beta = stod(argv[++i]);
             } else if (a == "--tag" && i + 1 < argc) {
                 runTag = argv[++i];
+                g_runTag = runTag;
+            } else if (a == "--pr-init" && i + 1 < argc) {
+                g_prInit = stod(argv[++i]);
+            } else if (a == "--pr-alpha" && i + 1 < argc) {
+                g_prAlpha = stod(argv[++i]);
+            } else if (a == "--regen" && i + 1 < argc) {
+                g_regen = stod(argv[++i]);
+            } else if (a == "--island-patience" && i + 1 < argc) {
+                g_islandPatience = stoi(argv[++i]);
+            } else if (a == "--ms-sel" && i + 1 < argc) {
+                g_msSel = stod(argv[++i]);
+            } else if (a == "--ms-sel-top" && i + 1 < argc) {
+                g_msSelTop = stod(argv[++i]);
+            } else if (a == "--cost-sel" && i + 1 < argc) {
+                g_costSel = stod(argv[++i]);
+            } else if (a == "--cost-sel-top" && i + 1 < argc) {
+                g_costSelTop = stod(argv[++i]);
+            } else if (a == "--zero-win" && i + 1 < argc) {
+                g_zeroWin = stod(argv[++i]);
+            } else if (a == "--ms-mate" && i + 1 < argc) {
+                g_msMate = stod(argv[++i]);
+            } else if (a == "--lambda-gene") {
+                g_lambdaGene = true;
+            } else if (a == "--lambda-mut" && i + 1 < argc) {
+                g_lambdaMut = stod(argv[++i]);
+            } else if (a == "--lambda-kappa" && i + 1 < argc) {
+                g_lambdaKappa = stod(argv[++i]);
+            } else if (a == "--cost-island" && i + 1 < argc) {
+                g_costIsland = stoi(argv[++i]);
+            } else if (a == "--cost-island-kids" && i + 1 < argc) {
+                g_costIslandKids = stoi(argv[++i]);
+            } else if (a == "--cost-island-patience" && i + 1 < argc) {
+                g_costIslandPatience = stoi(argv[++i]);
+            } else if (a == "--pop" && i + 1 < argc) {
+                g_pop = stoi(argv[++i]);
+            } else if (a == "--deadline-cal") {
+                g_deadlineCal = true; g_deadlineGene = true;
+            } else if (a == "--deadline-only") {
+                g_deadlineOnly = true; g_deadlineGene = true;
+            } else if (a == "--deadline-gene") {
+                g_deadlineGene = true;
+            } else if (a == "--deadline-mut" && i + 1 < argc) {
+                g_deadlineMut = stod(argv[++i]);
+            } else if (a == "--time-block-win" && i + 1 < argc) {
+                g_timeBlockWin = stod(argv[++i]);
+            } else if (a == "--ms-mate-stall-child") {
+                g_msMateStallChild = 1;
+            } else if (a == "--ms-mate-filter") {
+                g_msMateFilter = 1;
+            } else if (a == "--ms-mate-patience" && i + 1 < argc) {
+                g_msMatePat = stoi(argv[++i]);
+            } else if (a == "--trace-children") {
+                g_traceChildren = 1;
+            } else if (a == "--block-win" && i + 1 < argc) {
+                g_blockWin = stod(argv[++i]);
+            } else if (a == "--island-kids" && i + 1 < argc) {
+                g_islandKids = stoi(argv[++i]);
+            } else if (a == "--island" && i + 1 < argc) {
+                g_island = stoi(argv[++i]);
+            } else if (a == "--trace") {
+                g_trace = true;
             } else if (a == "--cost-dir" && i + 1 < argc) {
                 g_costDir = argv[++i];
             } else if (a.rfind("--cost-dir=", 0) == 0) {
@@ -697,6 +884,15 @@ int main(int argc, char **argv) {
         // 既定 "costs" のときは既存の標準出力を1行も変えないため、非既定時のみ出す。
         if (g_costDir != "costs")
             cout << "[CONFIG] cost-dir=" << g_costDir << "\n";
+        populationSize = g_pop;
+        // 新しい探索オプションは公式結果と混ざらないよう、拡張コスト表と --tag を必須にする
+        if ((g_prInit > 0 || g_regen > 0 || g_trace || g_island > 0 || g_blockWin > 0 || g_msSel > 0 || g_costSel > 0 || g_zeroWin > 0 || g_msMate > 0 || g_timeBlockWin > 0 || g_deadlineGene || g_deadlineMut > 0 || g_lambdaGene || g_costIsland > 0 || g_pop != 100) && (g_costDir == "costs" || runTag.empty())) {
+            cerr << "[FATAL] --pr-init/--regen/--trace require --cost-dir=costs_ext and --tag\n";
+            return 1;
+        }
+        if (g_prInit > 0 || g_regen > 0 || g_trace || g_island > 0)
+            cout << "[CONFIG] pr-init=" << g_prInit << " pr-alpha=" << g_prAlpha
+                 << " regen=" << g_regen << " island=" << g_island << " kids=" << g_islandKids << " patience=" << g_islandPatience << " trace=" << g_trace << "\n";
 
         if (!instanceFile.empty()) {
             // 単一インスタンス実行

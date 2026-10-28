@@ -1,0 +1,60 @@
+j120 j12021_1 t1016_base_r1
+j120 j12021_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12021_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12022_1 t1016_base_r1
+j120 j12022_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12022_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12023_1 t1016_base_r1
+j120 j12023_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12023_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12024_1 t1016_base_r1
+j120 j12024_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12024_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12025_1 t1016_base_r1
+j120 j12025_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12025_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12026_1 t1016_base_r1
+j120 j12026_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12026_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12027_1 t1016_base_r1
+j120 j12027_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12027_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12028_1 t1016_base_r1
+j120 j12028_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12028_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12029_1 t1016_base_r1
+j120 j12029_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12029_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12030_1 t1016_base_r1
+j120 j12030_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12030_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12031_1 t1016_base_r1
+j120 j12031_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12031_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12032_1 t1016_base_r1
+j120 j12032_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12032_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12033_1 t1016_base_r1
+j120 j12033_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12033_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12034_1 t1016_base_r1
+j120 j12034_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12034_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12035_1 t1016_base_r1
+j120 j12035_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12035_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12036_1 t1016_base_r1
+j120 j12036_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12036_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12037_1 t1016_base_r1
+j120 j12037_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12037_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12038_1 t1016_base_r1
+j120 j12038_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12038_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12039_1 t1016_base_r1
+j120 j12039_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12039_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12040_1 t1016_base_r1
+j120 j12040_1 t1016_bwisrgp_r1 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1
+j120 j12040_1 t1016_prbwisrgp_r1 --pr-init 0.5 --island 20 --regen 0.1 --island-patience 30 --block-win 0.1

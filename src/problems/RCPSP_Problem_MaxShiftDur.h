@@ -90,14 +90,48 @@ public:
     // 実需の rho_needed が中央値 0.03 程度に偏っている（.miss_memory/040）ことへの対策の実験用。
     double getRhoPower() const { return rhoPower_; }
     void   setRhoPower(double k) { rhoPower_ = k; }
+    // 目標工期の遺伝子（2026-10-24、既定 OFF）。vars[n+0]（開始ダミーの窓幅で、従来は使われない）を目標工期 D に使い、
+    // 各作業の窓の右端を LST_j(D) = D − tail_j（先行関係だけの最長路で逆算した最遅開始）で打ち切る。
+    //   D = CP + (g/R)^2 × (T − CP)   （CP = 先行関係だけのクリティカルパス長）
+    // 工期に余裕のある作業だけが遅れられるので、遅らせが工期の鎖に積み上がるのを防ぐ（ε 制約法の考え方を復号に入れる）。
+    void setDeadlineGene(bool on);
+    bool getDeadlineGene() const { return deadlineMode_; }
+    // 目標工期だけで窓を決める（作業ごとの窓幅の遺伝子を使わず、窓は常に最大＝ LST_j(D) で打ち切るだけ）。探索的。
+    void setDeadlineOnly(bool on) { deadlineOnly_ = on; if (on) setDeadlineGene(true); }
+    // 暦を考えた最遅開始（2026-10-24）: LST を先行関係だけでなく、容量の暦（休暇日・容量削減）で作業が実行できない時刻を避けて逆算する。
+    // 他の作業による資源の取り合いは考えない（容量そのものが足りない時刻だけ避ける）。
+    void setDeadlineCalendar(bool on) { deadlineCal_ = on; if (on) setDeadlineGene(true); }
+    // 目標工期の働きの記録（診断用、計算には影響しない）: 窓を持つ作業の数、目標工期で窓が短くなった数、短くなったコマ数の合計
+    long long statWin_ = 0, statClamp_ = 0, statCut_ = 0;
+    // λ 遺伝子（2026-10-28、既定 OFF）: vars[n+n-1]（終端ダミーの窓幅で、従来は使われない）を u=g/R とし、
+    // 窓の中の配置を「コスト + λ_j × (t − t_mak)」の最小で選ぶ。λ_j = κ u^2 ×（その作業の t_mak での1コマあたりのコスト）。
+    // 少しの節約のために何周期も先へ飛ぶ遅らせ（休暇ありで工期の鎖を伸ばす主因、tools/ext1028/rv1_diag.py）を抑える。
+    void setLambdaGene(bool on, double kappa = 0.2) { lambdaMode_ = on; lambdaKappa_ = kappa; }
+    bool getLambdaGene() const { return lambdaMode_; }
 
     // ログ用エンコーディング名
     std::string encodingName() const override { return "MaxShiftDur"; }
 
+protected:
+    // 目標工期 D（deadlineMode_ のときだけ意味がある。P2/P3 の派生クラスでも使う）
+    int deadlineFromVars(const std::vector<int> &vars, int T) const {
+        const int n = (int)tail_.size();
+        if (!deadlineMode_ || n == 0 || (int)vars.size() <= n) return T;
+        const int cp = tail_[0];
+        const double u = std::max(0, std::min(R, vars[n])) / (double)R;
+        return cp + (int)std::lround(u * u * (double)std::max(0, T - cp));
+    }
+    bool lambdaMode_ = false;     // λ 遺伝子（既定 OFF）
+    double lambdaKappa_ = 0.2;
+    bool deadlineMode_ = false;   // 目標工期の遺伝子（既定 OFF）
+    std::vector<int> tail_;       // tail_[j] = j の開始から終端までの先行関係だけの最長路（所要時間込み）
 private:
     double alpha_ = 1.0;  // strategy-dependent coefficient
     double beta_  = 0.0;  // hybrid window coefficient (0.0 = disabled)
     double rhoPower_ = 1.0;  // rho の指数（1.0 = 従来）
+    bool deadlineOnly_ = false;   // 目標工期だけで窓を決める（既定 OFF）
+    bool deadlineCal_ = false;    // 暦を考えた最遅開始（既定 OFF）
+    std::vector<int> revOrder_;   // 後続が先に来る順（暦つきの逆算に使う）
 };
 
 #endif // RCPSP_PROBLEM_MAXSHIFTDUR_H

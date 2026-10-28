@@ -208,11 +208,13 @@ int main(int argc, char **argv) {
     enableKeepAwake();
     setvbuf(stdout, nullptr, _IONBF, 0); cout << unitbuf;
     vector<string> pos; string costDir = "costs_ext"; double tl = 120.0; string warmPath;
+    string outTag;   // --tag=xxx でファイル名の末尾に _xxx を付ける（既存の結果を上書きしないため、2026-10-28）
     for (int i = 1; i < argc; ++i) {
         string a = argv[i];
         if (a.rfind("--cost-dir=", 0) == 0) costDir = a.substr(11);
         else if (a.rfind("--time-limit=", 0) == 0) tl = stod(a.substr(13));
         else if (a.rfind("--warm=", 0) == 0) warmPath = a.substr(7);
+        else if (a.rfind("--tag=", 0) == 0) outTag = "_" + a.substr(6);
         else pos.push_back(a);
     }
     if (pos.size() < 3) { cerr << "usage: P3Slot <inst.sm> <rr> <rv> [eps=30] [--cost-dir=] [--time-limit=]\n"; return 1; }
@@ -245,8 +247,8 @@ int main(int argc, char **argv) {
     const string dir = "results/EXT_COST/FUN_MIP_P3SLOT/" + prefix + "/";
     if (dir.rfind("results/EXT_COST/", 0) != 0) return 3;
     fs::create_directories(dir);
-    ofstream fun(dir + "FUN_MIP_P3SLOT_" + prefix + "_" + ctag + ".txt");
-    ofstream gap(dir + "GAP_MIP_P3SLOT_" + prefix + "_" + ctag + ".csv");
+    ofstream fun(dir + "FUN_MIP_P3SLOT_" + prefix + "_" + ctag + outTag + ".txt");
+    ofstream gap(dir + "GAP_MIP_P3SLOT_" + prefix + "_" + ctag + outTag + ".csv");
     gap << "makespan,cost,gap,optimal,solve_seconds\n"; gap << fixed;
     double prev = 1e18;
     for (int e : eps) {

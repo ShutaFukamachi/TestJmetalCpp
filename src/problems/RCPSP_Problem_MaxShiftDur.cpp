@@ -99,6 +99,34 @@ void RCPSP_Problem_MaxShiftDur::setStrategy(int s) {
 }
 
 // ============================================================
+//  setDeadlineGene
+//   目標工期の遺伝子を有効にし、tail_（先行関係だけの最長路）を一度だけ計算する。
+// ============================================================
+void RCPSP_Problem_MaxShiftDur::setDeadlineGene(bool on) {
+    deadlineMode_ = on;
+    if (!on) return;
+    const int n = getNumJobs();
+    tail_.assign(n, -1);
+    revOrder_.clear();
+    // 後続が先に決まる順（後ろから）に計算する。番号順がトポロジカルとは限らないので、決まるまで繰り返す。
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int j = n - 1; j >= 0; --j) {
+            if (tail_[j] >= 0) continue;
+            int best = 0; bool ready = true;
+            for (int s : instance.successors[j]) {
+                if (s < 0 || s >= n) continue;
+                if (tail_[s] < 0) { ready = false; break; }
+                best = std::max(best, tail_[s]);
+            }
+            if (ready) { tail_[j] = instance.duration[j] + best; changed = true; revOrder_.push_back(j); }
+        }
+    }
+    for (int j = 0; j < n; ++j) if (tail_[j] < 0) { tail_[j] = instance.duration[j]; revOrder_.push_back(j); }
+}
+
+// ============================================================
 //  コンストラクタ
 //   基底クラス RCPSP_Problem_MaxShift のコンストラクタを呼んだあと、
 //   vars[n..2n-1] の上限を R に上書き（基底が halfT を設定してしまうため）。
@@ -197,6 +225,7 @@ void RCPSP_Problem_MaxShiftDur::evaluate(Solution *solution) {
     for (int j = 0; j < n; ++j) {
         int    key = vars[n + j];
         double rho = std::max(0, std::min(R, key)) / (double)R;
+        if (deadlineOnly_) rho = 1.0;   // 窓は目標工期で打ち切るだけ
         if (rhoPower_ != 1.0) rho = std::pow(rho, rhoPower_);
         double dj  = (double)instance.duration[j];
         double eff = std::max(alpha * dj, beta * (double)T);
@@ -205,6 +234,37 @@ void RCPSP_Problem_MaxShiftDur::evaluate(Solution *solution) {
     // ダミー端点は常に最早配置（d_j=0 で自動的に 0 になるが明示的にガード）
     if (n > 0) winArr[0]     = 0;
     if (n > 1) winArr[n - 1] = 0;
+
+    // 目標工期 D（deadlineMode_ のときだけ）: vars[n+0] から D = CP + u^2 (T − CP)
+    int deadline = T;
+    if (deadlineMode_ && n > 0 && (int)tail_.size() == n) {
+        const int cp = tail_[0];
+        const double u = std::max(0, std::min(R, vars[n])) / (double)R;
+        deadline = cp + (int)std::lround(u * u * (double)std::max(0, T - cp));
+    }
+    // λ 遺伝子（lambdaMode_ のとき）: vars[n+n-1] から u^2
+    double lamU2 = 0.0;
+    if (lambdaMode_ && n > 1) { const double u = std::max(0, std::min(R, vars[n + n - 1])) / (double)R; lamU2 = u * u; }
+    // 暦を考えた最遅開始 lstCal[j]（deadlineCal_ のとき）: 後続の最遅開始と D から、容量の暦で実行できる最も遅い開始へ
+    std::vector<int> lstCal;
+    if (deadlineMode_ && deadlineCal_ && (int)revOrder_.size() == n) {
+        lstCal.assign(n, deadline);
+        for (int j : revOrder_) {
+            int lf = deadline;
+            for (int s : instance.successors[j]) if (s >= 0 && s < n) lf = std::min(lf, lstCal[s]);
+            const int d = instance.duration[j];
+            int st = lf - d;
+            while (d > 0 && st >= 0) {
+                bool ok = true;
+                for (int tau = st; tau < st + d && ok; ++tau)
+                    for (int k = 0; k < nRes; ++k)
+                        if (instance.demand[j][k] > 0 && instance.demand[j][k] > capacityAtTime(k, tau)) { ok = false; break; }
+                if (ok) break;
+                --st;
+            }
+            lstCal[j] = st;
+        }
+    }
 
     // ---- 4. 先行リスト構築 ----
     std::vector<std::vector<int>> preds(n);
@@ -285,10 +345,21 @@ void RCPSP_Problem_MaxShiftDur::evaluate(Solution *solution) {
 
         if (winArr[j] > 0) {
             int latest = std::min(T - d, t_mak + winArr[j]);
+            if (deadlineMode_ && (int)tail_.size() == n) {
+                const int cap = lstCal.empty() ? deadline - tail_[j] : lstCal[j];   // 目標工期から逆算した最遅開始まで
+                ++statWin_;
+                if (cap < latest) { ++statClamp_; statCut_ += latest - std::max(cap, t_mak); }
+                latest = std::min(latest, cap);
+            }
+            // λ 遺伝子: 「コスト + λ_j ×（遅らせたコマ数）」の最小で選ぶ（lam=0 なら従来どおりコスト最小）
+            const double lam = (lamU2 > 0.0 && d > 0) ? lambdaKappa_ * lamU2 * bestCost / (double)d : 0.0;
+            double bestScore = bestCost;
             for (int t = t_mak + 1; t <= latest; ++t) {
                 if (canPlace(j, t)) {
                     double c = computeJobCostAt(j, t, T);
-                    if (c < bestCost) {     // strict '<' → 左詰め保証
+                    double sc = c + lam * (double)(t - t_mak);
+                    if (sc < bestScore) {     // strict '<' → 左詰め保証
+                        bestScore = sc;
                         bestCost = c;
                         placedAt = t;
                     }
@@ -378,6 +449,7 @@ Solution* RCPSP_Problem_MaxShiftDur::createCostExtremeSolution() {
     }
     // ダミー端点は常に 0
     if (n > 0 && n     < nVars) vars[n + 0]     = 0;
+    if (deadlineMode_ && n > 0 && n < nVars) vars[n + 0] = R;   // 目標工期の遺伝子: コスト極端解は制限なし
     if (n > 1 && n+n-1 < nVars) vars[n + n - 1] = 0;
     return sol;
 }
@@ -428,7 +500,13 @@ Solution* RCPSP_Problem_MaxShiftDur::createRandomTopoSolution() {
 
     // ダミー端点は常に 0
     if (n > 0 && n     < nVars) vars[n + 0]     = 0;
+    // 目標工期の遺伝子（deadlineMode_ のとき）: 初期解では一様乱数で散らす
+    if (deadlineMode_ && n > 0 && n < nVars) { static thread_local std::mt19937 rngD{std::random_device{}()};
+        vars[n + 0] = std::uniform_int_distribution<int>(0, R)(rngD); }
     if (n > 1 && n+n-1 < nVars) vars[n + n - 1] = 0;
+    // λ 遺伝子（lambdaMode_ のとき）: 初期解では一様乱数で散らす
+    if (lambdaMode_ && n > 1 && n+n-1 < nVars) { static thread_local std::mt19937 rngL{std::random_device{}()};
+        vars[n + n - 1] = std::uniform_int_distribution<int>(0, R)(rngL); }
 
     return sol;
 }

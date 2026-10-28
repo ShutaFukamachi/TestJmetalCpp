@@ -3,6 +3,7 @@
 #define RCPSP_PROBLEM_MAXSHIFT_H
 
 #include "RCPSP_Problem.h"
+#include <random>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,22 @@ public:
     // ----------------------------------------------------------------
     Solution* createPriorityRuleSolution(int rule);
 
+    // ----------------------------------------------------------------
+    //  sampleBiasedPriorityList（2026-10-14 ゼミ指摘: 優先規則＋ランダム性）
+    //   eligible 集合から重み (優先度 - 最小優先度 + 1)^alpha で1つずつ選ぶ
+    //   偏りランダム生成（regret-based biased random sampling）。
+    //     rule = 0 : LFT（最遅完了時刻が早いほど優先）
+    //     rule = 1 : LST（最遅開始時刻が早いほど優先）
+    //     rule = 2 : MTS（推移的後続数が多いほど優先）
+    //     rule = 3 : GRPW（d_j + 直後続の所要時間和が大きいほど優先）
+    //     rule < 0 : 上の4つから一様に選ぶ
+    //   base と keep>0 を渡すと base の先頭 keep 個をそのまま残し、
+    //   残りだけを生成し直す（部分再構築変異で使う）。返り値は活動リストのみ。
+    // ----------------------------------------------------------------
+    std::vector<int> sampleBiasedPriorityList(int rule, double alpha, std::mt19937 &rng,
+                                              const std::vector<int> *base = nullptr,
+                                              int keep = 0);
+
     // 変異オペレータが σ 計算・クリップに使用するホライゾン T を返す
     int getHorizon() const;
 
@@ -126,6 +143,10 @@ public:
 private:
     bool residualTieBreak_ = false;
     bool parallelSGS_      = false;
+    // sampleBiasedPriorityList 用の優先度表（4規則 × n、大きいほど優先）。初回呼び出しで作る。
+    // 問題インスタンスは戦略ごとのスレッドに1つずつなので排他は不要。
+    std::vector<std::vector<double>> prioTable_;
+    std::vector<std::vector<int>>    predsCache_;
 };
 
 #endif // RCPSP_PROBLEM_MAXSHIFT_H
